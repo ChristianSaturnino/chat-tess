@@ -8,7 +8,7 @@ let override: LlmAdapter | undefined;
 export function getLlm(provider: string): LlmAdapter {
   if (override) return override;
   const cfg = config();
-  if (provider === 'openai') return new OpenAiAdapter(cfg.env.OPENAI_API_KEY!);
+  if (provider === 'openai') return new OpenAiAdapter(cfg.env.OPENAI_API_KEY!, cfg.env.OPENAI_REASONING_EFFORT);
   return new FakeAdapter(cfg.env.FAKE_LLM_DELAY_MS);
 }
 

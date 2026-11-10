@@ -6,7 +6,28 @@ export type RunEventPayloads = {
   run_queued: { userMessageId: string; assistantMessageId: string };
   run_started: { version: number; resumed: boolean };
   /** Nova tentativa de geração: o cliente deve descartar o texto parcial anterior da mensagem. */
-  attempt_started: { attemptId: string; stepId: string; attemptNo: number; model: string; reservedMicro: number; messageId: string };
+  attempt_started: {
+    attemptId: string;
+    stepId: string;
+    attemptNo: number;
+    model: string;
+    reservedMicro: number;
+    messageId: string;
+    /** Texto já confirmado por etapas anteriores do run; o parcial desta etapa recomeça depois dele. */
+    baseText?: string;
+  };
+  web_search: { attemptId: string; itemId: string; status: 'searching' | 'completed' };
+  tool_calls_requested: { stepId: string; calls: { callId: string; name: string }[] };
+  tool_call_started: { callId: string; name: string; toolKey: string; arguments: string };
+  tool_call_completed: {
+    callId: string;
+    name: string;
+    status: 'completed' | 'failed' | 'blocked' | 'unknown';
+    durationMs: number;
+    sourceLabels: string[];
+    error: ErrorDto | null;
+  };
+  policy_blocked: { callId: string; name: string; code: string; message: string };
   text_delta: { attemptId: string; messageId: string; text: string };
   attempt_completed: { attemptId: string; usage: UsageDto; costMicro: number; durationMs: number };
   attempt_failed: { attemptId: string; error: ErrorDto; billing: BillingOutcome; retrying: boolean };
@@ -42,6 +63,9 @@ export type MessageDto = {
   contentText: string;
   runId: string | null;
   createdAt: string;
+  attachments: { id: string; filename: string; mimeType: string; sizeBytes: number }[];
+  /** cited=true: referenciada na resposta; false: consultada sem citação. */
+  sources: { label: string; kind: string; title: string | null; url: string | null; excerpt: string | null; cited: boolean }[];
 };
 
 export type ConversationSnapshotDto = {

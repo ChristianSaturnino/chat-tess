@@ -1,19 +1,51 @@
 import type { UsageSnapshot } from '@/db/schema';
 
-export type LlmInputMessage = { role: 'system' | 'user' | 'assistant'; content: string };
+export type ContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image'; mimeType: string; dataBase64: string; filename: string }
+  | { type: 'file'; mimeType: string; dataBase64: string; filename: string };
+
+/**
+ * Itens de contexto independentes de provider. 'opaque' preserva itens de protocolo
+ * (reasoning cifrado, chamadas de busca nativa, mensagens com metadados) para reenvio fiel.
+ */
+export type LlmItem =
+  | { kind: 'message'; role: 'user' | 'assistant'; content: ContentPart[] }
+  | { kind: 'function_call'; callId: string; name: string; arguments: string }
+  | { kind: 'function_call_output'; callId: string; output: string }
+  | { kind: 'opaque'; provider: string; item: unknown };
+
+export type LlmToolDef = { name: string; description: string; parameters: Record<string, unknown> };
 
 export type LlmRequest = {
   model: string;
   instructions: string;
-  input: LlmInputMessage[];
+  input: LlmItem[];
+  tools: LlmToolDef[];
+  /** Busca nativa do provider; maxCalls é o teto usado na reserva de créditos. */
+  webSearch: { maxCalls: number } | null;
   maxOutputTokens: number;
   signal: AbortSignal;
 };
 
+export type FunctionCall = { callId: string; name: string; arguments: string };
+export type Citation = { url: string; title: string | null };
+
 export type LlmStreamEvent =
   | { type: 'request_id'; id: string }
   | { type: 'text_delta'; text: string }
-  | { type: 'completed'; usage: UsageSnapshot; status: 'completed' | 'incomplete'; incompleteReason?: string };
+  | { type: 'web_search'; itemId: string; status: 'searching' | 'completed'; query?: string }
+  | {
+      type: 'completed';
+      usage: UsageSnapshot;
+      status: 'completed' | 'incomplete';
+      incompleteReason?: string;
+      /** Itens a reenviar como contexto na próxima chamada do mesmo run. */
+      output: LlmItem[];
+      functionCalls: FunctionCall[];
+      citations: Citation[];
+      webSearchCalls: number;
+    };
 
 /**
  * Classificação de erro para cobrança:

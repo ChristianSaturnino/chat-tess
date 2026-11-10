@@ -1,41 +1,96 @@
-import type { LlmAdapter, LlmRequest, LlmStreamEvent } from './types';
+import type { FunctionCall, LlmAdapter, LlmItem, LlmRequest, LlmStreamEvent } from './types';
 import { LlmError } from './types';
 
 /**
  * Provider determinístico para desenvolvimento e testes. Não chama rede.
- * Gatilhos no texto do usuário para exercitar falhas: [[fail:4xx]], [[fail:5xx]].
+ * Gatilhos no texto do usuário:
+ * - [[fail:4xx]] / [[fail:5xx]]: falha antes / no meio do stream.
+ * - [[tool:nome {"arg":1}]]: pede a chamada da tool (várias podem ser pedidas de uma vez).
  */
 export class FakeAdapter implements LlmAdapter {
   readonly provider = 'fake';
   constructor(private readonly delayMs: number) {}
 
   async *stream(req: LlmRequest): AsyncIterable<LlmStreamEvent> {
-    const last = [...req.input].reverse().find((m) => m.role === 'user')?.content ?? '';
-    if (last.includes('[[fail:4xx]]')) throw new LlmError('http_400', 'falha simulada 4xx', 'not_billed', false);
+    const lastUserIdx = req.input.findLastIndex((i) => i.kind === 'message' && i.role === 'user');
+    const lastUser = req.input[lastUserIdx] as Extract<LlmItem, { kind: 'message' }> | undefined;
+    const userText = lastUser?.content.map((p) => (p.type === 'text' ? p.text : '')).join('') ?? '';
+    if (userText.includes('[[fail:4xx]]')) throw new LlmError('http_400', 'falha simulada 4xx', 'not_billed', false);
 
     yield { type: 'request_id', id: `fake_${Date.now()}` };
-    const turns = req.input.filter((m) => m.role === 'user').length;
-    const answer =
-      `Resposta simulada (turno ${turns}). Você escreveu: "${last.slice(0, 200)}". ` +
-      'Este texto é gerado pelo provider fake para validar streaming, persistência e recuperação.';
+
+    const after = req.input.slice(lastUserIdx + 1);
+    const outputs = after.filter((i): i is Extract<LlmItem, { kind: 'function_call_output' }> => i.kind === 'function_call_output');
+    const requested = parseToolRequests(userText).filter((r) => req.tools.some((t) => t.name === r.name));
+
+    if (outputs.length === 0 && requested.length > 0) {
+      const functionCalls: FunctionCall[] = requested.map((r, i) => ({ callId: `call_fake_${i}_${Date.now()}`, name: r.name, arguments: r.arguments }));
+      yield {
+        type: 'completed',
+        status: 'completed',
+        usage: usage(req, 20),
+        output: functionCalls.map((c) => ({ kind: 'function_call', ...c })),
+        functionCalls,
+        citations: [],
+        webSearchCalls: 0,
+      };
+      return;
+    }
+
+    const attachments = lastUser?.content.filter((p) => p.type !== 'text').map((p) => (p as { filename: string }).filename) ?? [];
+    const labels = [...new Set(outputs.flatMap((o) => o.output.match(/\[S\d+\]/g) ?? []))];
+    const turns = req.input.filter((m) => m.kind === 'message' && m.role === 'user').length;
+    let answer = `Resposta simulada (turno ${turns}). Você escreveu: "${userText.slice(0, 200)}". `;
+    if (attachments.length) answer += `Anexos recebidos: ${attachments.join(', ')}. `;
+    if (outputs.length) {
+      answer += `Consultei ${outputs.length} ferramenta(s). `;
+      for (const o of outputs) answer += `Resultado: ${o.output.replace(/\s+/g, ' ').slice(0, 160)}. `;
+      if (labels.length) answer += `Fontes: ${labels.join(' ')}.`;
+    } else {
+      answer += 'Este texto é gerado pelo provider fake para validar streaming, persistência e recuperação.';
+    }
+
     const words = answer.split(/(?<= )/);
     let produced = 0;
     for (const [i, w] of words.entries()) {
       if (req.signal.aborted) throw new LlmError('aborted', 'chamada cancelada', 'unknown', false);
-      if (last.includes('[[fail:5xx]]') && i === Math.floor(words.length / 2)) {
+      if (userText.includes('[[fail:5xx]]') && i === Math.floor(words.length / 2)) {
         throw new LlmError('http_500', 'falha simulada no meio do stream', 'unknown', true);
       }
       if (this.delayMs > 0) await sleep(this.delayMs, req.signal);
       produced += w.length;
       yield { type: 'text_delta', text: w };
     }
-    const inputChars = req.instructions.length + req.input.reduce((n, m) => n + m.content.length, 0);
     yield {
       type: 'completed',
       status: 'completed',
-      usage: { inputTokens: Math.ceil(inputChars / 4), cachedInputTokens: 0, outputTokens: Math.ceil(produced / 4), reasoningTokens: 0 },
+      usage: usage(req, Math.ceil(produced / 4)),
+      output: [],
+      functionCalls: [],
+      citations: [],
+      webSearchCalls: 0,
     };
   }
+}
+
+function parseToolRequests(text: string) {
+  const out: { name: string; arguments: string }[] = [];
+  for (const m of text.matchAll(/\[\[tool:([a-zA-Z0-9_-]+)\s*(\{.*?\})?\]\]/g)) {
+    out.push({ name: m[1]!, arguments: m[2] ?? '{}' });
+  }
+  return out;
+}
+
+function usage(req: LlmRequest, outputTokens: number) {
+  const chars =
+    req.instructions.length +
+    req.input.reduce((n, i) => {
+      if (i.kind === 'message') return n + i.content.reduce((k, p) => k + (p.type === 'text' ? p.text.length : 1000), 0);
+      if (i.kind === 'function_call_output') return n + i.output.length;
+      if (i.kind === 'function_call') return n + i.arguments.length;
+      return n;
+    }, 0);
+  return { inputTokens: Math.ceil(chars / 4), cachedInputTokens: 0, outputTokens, reasoningTokens: 0 };
 }
 
 function sleep(ms: number, signal: AbortSignal) {

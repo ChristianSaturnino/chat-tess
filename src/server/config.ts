@@ -28,6 +28,15 @@ const envSchema = z.object({
   DEMO_MAX_SESSIONS_PER_HOUR: intFromEnv(30),
   TURNS_PER_MINUTE: intFromEnv(10),
   FAKE_LLM_DELAY_MS: intFromEnv(40),
+  /** Tarifa por chamada de busca nativa, em micro-USD; sem valor, a busca fica indisponível. */
+  OPENAI_WEB_SEARCH_FEE_MICRO: z.coerce.number().int().nonnegative().optional(),
+  WEB_SEARCH_MAX_CALLS: intFromEnv(3),
+  /** Conteúdo da busca é cobrado como tokens de entrada; estimativa por chamada para a reserva. */
+  WEB_SEARCH_TOKENS_PER_CALL: intFromEnv(10_000),
+  /** Esforço de raciocínio (modelos de reasoning); tokens de raciocínio são cobrados como saída. */
+  OPENAI_REASONING_EFFORT: z.enum(['none', 'low', 'medium', 'high']).optional(),
+  MAX_ITERATIONS: intFromEnv(6),
+  MAX_TOOL_CALLS: intFromEnv(12),
 });
 
 export type LlmSettings = {
@@ -82,7 +91,15 @@ function load() {
       heartbeatMs: 10_000,
       deltaFlushMs: 120,
       deltaFlushChars: 400,
+      maxIterations: env.MAX_ITERATIONS,
+      maxToolCalls: env.MAX_TOOL_CALLS,
+      toolConcurrency: 4,
     },
+    /** Sob cap estrito, a busca só é oferecida com tarifa conhecida e teto de chamadas. */
+    webSearch:
+      llm.provider === 'openai' && env.OPENAI_WEB_SEARCH_FEE_MICRO !== undefined
+        ? { maxCalls: env.WEB_SEARCH_MAX_CALLS, feeMicroPerCall: env.OPENAI_WEB_SEARCH_FEE_MICRO, tokensPerCall: env.WEB_SEARCH_TOKENS_PER_CALL }
+        : null,
   };
 }
 

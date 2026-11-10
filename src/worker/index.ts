@@ -5,6 +5,7 @@ import { executeRun, findStaleRuns } from '@/server/chat/engine';
 import { config } from '@/server/config';
 import { logger } from '@/server/logger';
 import { enqueueRun, getBoss, RUN_QUEUE, stopBoss, type RunJob } from '@/server/runs/queue';
+import { cleanupOrphanAttachments } from '@/server/storage/attachments';
 
 const workerId = `${hostname()}:${process.pid}:${randomUUID().slice(0, 8)}`;
 const SWEEP_MS = 15_000;
@@ -34,10 +35,14 @@ async function main() {
   };
   await sweep();
   const timer = setInterval(sweep, SWEEP_MS);
+  const cleanup = setInterval(() => {
+    cleanupOrphanAttachments().catch((err) => logger.error({ err }, 'limpeza de anexos falhou'));
+  }, 60 * 60_000);
 
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'encerrando worker');
     clearInterval(timer);
+    clearInterval(cleanup);
     await stopBoss();
     await closeDb();
     process.exit(0);

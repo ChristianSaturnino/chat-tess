@@ -6,6 +6,7 @@ import { startTurn } from '@/server/runs/commands';
 const body = z.object({
   text: z.string().min(1).max(20_000),
   idempotencyKey: z.string().min(8).max(100),
+  attachmentIds: z.array(z.uuid()).max(5).optional(),
 });
 
 export const POST = route(async (req: Request, ctx: { params: Promise<{ id: string }> }) => {

@@ -145,7 +145,15 @@ describe('engine', () => {
           yield { type: 'text_delta', text: 'PARCIAL-DO-WORKER-A '.repeat(30) }; // força flush
           await gate; // "trava" até o teste liberar
           yield { type: 'text_delta', text: 'tarde demais' };
-          yield { type: 'completed', status: 'completed', usage: { inputTokens: 1, cachedInputTokens: 0, outputTokens: 1, reasoningTokens: 0 } };
+          yield {
+            type: 'completed',
+            status: 'completed',
+            usage: { inputTokens: 1, cachedInputTokens: 0, outputTokens: 1, reasoningTokens: 0 },
+            output: [],
+            functionCalls: [],
+            citations: [],
+            webSearchCalls: 0,
+          };
           return;
         }
         yield* normal.stream(req);

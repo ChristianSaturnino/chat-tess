@@ -80,7 +80,16 @@ async function lockReservation(tx: Db, attemptId: string) {
  */
 export async function settle(
   tx: Db,
-  input: { attemptId: string; userId: string; model: string; pricingVersion: string; usage: UsageSnapshot; costMicro: number },
+  input: {
+    attemptId: string;
+    userId: string;
+    model: string;
+    pricingVersion: string;
+    usage: UsageSnapshot;
+    webSearchCalls?: number;
+    toolFeeMicro?: number;
+    costMicro: number;
+  },
 ): Promise<{ settled: boolean }> {
   const res = await lockReservation(tx, input.attemptId);
   if (!res) throw new Error('reserva inexistente para a tentativa');
@@ -98,6 +107,8 @@ export async function settle(
       cachedInputTokens: input.usage.cachedInputTokens,
       outputTokens: input.usage.outputTokens,
       reasoningTokens: input.usage.reasoningTokens,
+      webSearchCalls: input.webSearchCalls ?? 0,
+      toolFeeMicro: input.toolFeeMicro ?? 0,
       costMicro: input.costMicro,
     })
     .onConflictDoNothing()

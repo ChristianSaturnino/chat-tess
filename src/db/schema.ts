@@ -98,7 +98,13 @@ export type RunConfigSnapshot = {
   maxLlmAttempts: number;
   pricingVersion: string;
   systemPromptVersion: string;
+  /** Tools habilitadas congeladas no início do run; revogação ainda é revalidada a cada chamada. */
+  tools?: ToolSnapshot[];
+  webSearch?: { maxCalls: number; feeMicroPerCall: number; tokensPerCall?: number } | null;
+  limits?: { maxIterations: number; maxToolCalls: number };
 };
+
+export type ToolSnapshot = { key: string; version: string };
 
 export const runs = pgTable(
   'runs',
@@ -247,6 +253,10 @@ export const usageLedger = pgTable(
     cachedInputTokens: integer('cached_input_tokens').notNull(),
     outputTokens: integer('output_tokens').notNull(),
     reasoningTokens: integer('reasoning_tokens').notNull(),
+    webSearchCalls: integer('web_search_calls').notNull().default(0),
+    /** Tarifas de tools nativas do provider, separadas do custo de tokens. */
+    toolFeeMicro: micro('tool_fee_micro'),
+    /** Total cobrado: tokens + tarifas. */
     costMicro: micro('cost_micro'),
     createdAt: createdAt(),
   },
@@ -268,4 +278,183 @@ export const auditEvents = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index('audit_events_actor_idx').on(t.actorUserId, t.createdAt)],
+);
+
+export const ATTACHMENT_STATUS = ['ready', 'attached', 'deleted'] as const;
+
+export const attachments = pgTable(
+  'attachments',
+  {
+    id: id(),
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    messageId: uuid('message_id').references(() => messages.id, { onDelete: 'set null' }),
+    storageKey: text('storage_key').notNull(),
+    filename: text('filename').notNull(),
+    /** Tipo detectado pelos bytes, não pelo que o navegador declarou. */
+    mimeType: text('mime_type').notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+    sha256: text('sha256').notNull(),
+    status: text('status', { enum: ATTACHMENT_STATUS }).notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index('attachments_user_idx').on(t.userId), index('attachments_message_idx').on(t.messageId)],
+);
+
+export const CONNECTION_STATUS = ['active', 'reconnect_required', 'revoked'] as const;
+
+/** Autorização de um serviço externo por usuário. Separada da identidade de login. */
+export const connections = pgTable(
+  'connections',
+  {
+    id: id(),
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    provider: text('provider', { enum: ['google'] }).notNull(),
+    service: text('service', { enum: ['drive', 'gmail'] }).notNull(),
+    externalAccountId: text('external_account_id').notNull(),
+    externalEmail: text('external_email'),
+    grantedScopes: text('granted_scopes').array().notNull(),
+    accessTokenEnc: text('access_token_enc'),
+    refreshTokenEnc: text('refresh_token_enc'),
+    accessTokenExpiresAt: timestamp('access_token_expires_at', { withTimezone: true }),
+    status: text('status', { enum: CONNECTION_STATUS }).notNull(),
+    lastError: text('last_error'),
+    createdAt: createdAt(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('connections_user_service_uq').on(t.userId, t.provider, t.service)],
+);
+
+export type HttpToolConfig = {
+  method: 'GET' | 'POST';
+  url: string;
+  /** JSON Schema dos argumentos que o modelo envia. */
+  parameters: Record<string, unknown>;
+  /** Cabeçalhos cifrados (ex.: Authorization). Nunca entram no prompt. */
+  secretHeadersEnc: string | null;
+  sideEffect: boolean;
+};
+
+/** Tool HTTP cadastrada pelo usuário. Configuração versionada e imutável por versão. */
+export const tools = pgTable(
+  'tools',
+  {
+    id: id(),
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    description: text('description').notNull(),
+    currentVersion: integer('current_version').notNull().default(1),
+    status: text('status', { enum: ['active', 'deleted'] }).notNull().default('active'),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('tools_user_name_uq').on(t.userId, t.name).where(sql`status = 'active'`)],
+);
+
+export const toolVersions = pgTable(
+  'tool_versions',
+  {
+    id: id(),
+    toolId: uuid('tool_id').notNull().references(() => tools.id, { onDelete: 'cascade' }),
+    version: integer('version').notNull(),
+    config: jsonb('config').$type<HttpToolConfig>().notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('tool_versions_tool_version_uq').on(t.toolId, t.version)],
+);
+
+export type McpToolDef = { name: string; description: string; inputSchema: Record<string, unknown>; readOnlyHint?: boolean };
+
+export const mcpServers = pgTable('mcp_servers', {
+  id: id(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  name: text('name').notNull(),
+  url: text('url').notNull(),
+  bearerTokenEnc: text('bearer_token_enc'),
+  catalog: jsonb('catalog').$type<McpToolDef[]>().notNull().default([]),
+  catalogVersion: integer('catalog_version').notNull().default(0),
+  catalogHash: text('catalog_hash'),
+  status: text('status', { enum: ['active', 'error', 'deleted'] }).notNull().default('active'),
+  lastError: text('last_error'),
+  lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
+  createdAt: createdAt(),
+});
+
+/**
+ * Habilitação de tools por conversa. tool_key: builtin:<nome> | http:<toolId> | mcp:<serverId> | google:<service>.
+ * Ausência de linha = padrão da tool (ver ToolRegistry).
+ */
+export const conversationTools = pgTable(
+  'conversation_tools',
+  {
+    conversationId: uuid('conversation_id')
+      .notNull()
+      .references(() => conversations.id, { onDelete: 'cascade' }),
+    toolKey: text('tool_key').notNull(),
+    enabled: boolean('enabled').notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('conversation_tools_pk').on(t.conversationId, t.toolKey)],
+);
+
+export const TOOL_CALL_STATUS = ['running', 'completed', 'failed', 'blocked', 'unknown'] as const;
+
+export const toolCalls = pgTable(
+  'tool_calls',
+  {
+    id: id(),
+    stepId: uuid('step_id').notNull().references(() => runSteps.id, { onDelete: 'cascade' }),
+    runId: uuid('run_id').notNull().references(() => runs.id, { onDelete: 'cascade' }),
+    toolKey: text('tool_key').notNull(),
+    toolVersion: text('tool_version'),
+    name: text('name').notNull(),
+    providerCallId: text('provider_call_id').notNull(),
+    /** Argumentos validados; secrets nunca aparecem aqui. */
+    arguments: jsonb('arguments').$type<Record<string, unknown>>().notNull(),
+    resultPreview: text('result_preview'),
+    status: text('status', { enum: TOOL_CALL_STATUS }).notNull(),
+    error: jsonb('error').$type<{ code: string; message: string } | null>(),
+    sideEffect: boolean('side_effect').notNull().default(false),
+    durationMs: integer('duration_ms'),
+    createdAt: createdAt(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+  },
+  (t) => [uniqueIndex('tool_calls_step_uq').on(t.stepId), uniqueIndex('tool_calls_run_call_uq').on(t.runId, t.providerCallId)],
+);
+
+export const SOURCE_KINDS = ['web', 'attachment', 'drive', 'gmail', 'mcp', 'http'] as const;
+export type SourceKind = (typeof SOURCE_KINDS)[number];
+/** Fontes cujo conteúdo é privado do usuário: ativam a política contra exfiltração. */
+export const PRIVATE_SOURCE_KINDS: SourceKind[] = ['attachment', 'drive', 'gmail'];
+
+/** Material efetivamente obtido durante um run. Referência não concede acesso ao original. */
+export const sources = pgTable(
+  'sources',
+  {
+    id: id(),
+    runId: uuid('run_id').notNull().references(() => runs.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    /** Rótulo citável dentro do run (S1, S2…). */
+    label: text('label').notNull(),
+    kind: text('kind', { enum: SOURCE_KINDS }).notNull(),
+    ref: text('ref').notNull(),
+    title: text('title'),
+    url: text('url'),
+    contentHash: text('content_hash'),
+    excerpt: text('excerpt'),
+    retrievedAt: createdAt(),
+  },
+  (t) => [uniqueIndex('sources_run_label_uq').on(t.runId, t.label), uniqueIndex('sources_run_kind_ref_uq').on(t.runId, t.kind, t.ref)],
+);
+
+export const messageSources = pgTable(
+  'message_sources',
+  {
+    messageId: uuid('message_id')
+      .notNull()
+      .references(() => messages.id, { onDelete: 'cascade' }),
+    sourceId: uuid('source_id')
+      .notNull()
+      .references(() => sources.id, { onDelete: 'cascade' }),
+    cited: boolean('cited').notNull(),
+  },
+  (t) => [uniqueIndex('message_sources_pk').on(t.messageId, t.sourceId)],
 );

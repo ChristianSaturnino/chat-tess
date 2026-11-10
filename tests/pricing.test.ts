@@ -22,6 +22,12 @@ describe('costMicro', () => {
   });
 
   it('reserva cobre a saída máxima', () => {
-    expect(reservationMicro(0, 1000, pricing)).toBeGreaterThanOrEqual(1000 * 8);
+    expect(reservationMicro({ inputChars: 0, maxOutputTokens: 1000 }, pricing)).toBeGreaterThanOrEqual(1000 * 8);
+  });
+
+  it('reserva inclui o teto de tarifas da busca nativa', () => {
+    const semBusca = reservationMicro({ inputChars: 100, maxOutputTokens: 100 }, pricing);
+    const comBusca = reservationMicro({ inputChars: 100, maxOutputTokens: 100, webSearch: { maxCalls: 3, feeMicroPerCall: 10_000 } }, pricing);
+    expect(comBusca - semBusca).toBe(30_000);
   });
 });

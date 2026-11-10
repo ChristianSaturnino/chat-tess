@@ -4,7 +4,7 @@ import type { UsageSnapshot } from '@/db/schema';
 const PER_MILLION = 1_000_000;
 
 /**
- * Custo em micro-USD, arredondado para cima.
+ * Custo de tokens em micro-USD, arredondado para cima.
  * - Tokens em cache são parte de input_tokens: cobrados à taxa de cache e removidos da taxa cheia.
  * - Reasoning tokens já estão contidos em output_tokens: não somar de novo.
  */
@@ -21,12 +21,30 @@ export function estimateInputTokens(chars: number): number {
   return Math.ceil(chars / 3) + 256;
 }
 
-/** Reserva = entrada estimada sem cache + saída máxima. */
-export function reservationMicro(inputChars: number, maxOutputTokens: number, pricing: Pricing): number {
-  return costMicro(
-    { inputTokens: estimateInputTokens(inputChars), cachedInputTokens: 0, outputTokens: maxOutputTokens, reasoningTokens: 0 },
+export type ReservationInput = {
+  inputChars: number;
+  /** Tokens estimados fora do texto (imagens, PDFs, schemas de tools). */
+  extraInputTokens?: number;
+  maxOutputTokens: number;
+  webSearch?: { maxCalls: number; feeMicroPerCall: number; tokensPerCall?: number } | null;
+};
+
+/**
+ * Reserva = entrada estimada sem cache (incluindo o conteúdo que cada busca injeta)
+ * + saída máxima + teto de tarifas de busca nativa.
+ */
+export function reservationMicro(r: ReservationInput, pricing: Pricing): number {
+  const searchTokens = r.webSearch ? r.webSearch.maxCalls * (r.webSearch.tokensPerCall ?? 0) : 0;
+  const tokens = costMicro(
+    {
+      inputTokens: estimateInputTokens(r.inputChars) + (r.extraInputTokens ?? 0) + searchTokens,
+      cachedInputTokens: 0,
+      outputTokens: r.maxOutputTokens,
+      reasoningTokens: 0,
+    },
     pricing,
   );
+  return tokens + (r.webSearch ? r.webSearch.maxCalls * r.webSearch.feeMicroPerCall : 0);
 }
 
 /** 1 crédito = US$ 0,001 = 1000 micro-USD. */

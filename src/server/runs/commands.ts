@@ -1,12 +1,15 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { and, asc, desc, eq, gte, inArray, sql } from 'drizzle-orm';
-import { conversations, messages, runs, ACTIVE_RUN_STATUS, type RunConfigSnapshot } from '@/db/schema';
+import { attachments, conversations, messages, runs, ACTIVE_RUN_STATUS, type RunConfigSnapshot } from '@/db/schema';
 import { db, isUniqueViolation, withTx, type Db } from '@/db/client';
 import type { ConversationSnapshotDto, MessageDto } from '@/shared/events';
 import { audit } from '../audit/audit';
 import { config } from '../config';
 import { AppError, notFound } from '../errors';
 import { SYSTEM_PROMPT_VERSION } from '../chat/context';
+import { messageSourcesFor } from '../sources/sources';
+import { attachToMessage } from '../storage/attachments';
+import { snapshotTools } from '../tools/registry';
 import { appendEvent } from './events';
 import { enqueueRunInTx } from './queue';
 
@@ -40,11 +43,13 @@ export async function listConversations(actor: Actor) {
     .limit(100);
 }
 
-export type StartTurnInput = { conversationId: string; text: string; idempotencyKey: string };
+export type StartTurnInput = { conversationId: string; text: string; idempotencyKey: string; attachmentIds?: string[] };
 export type StartTurnResult = { runId: string; userMessageId: string; assistantMessageId: string; replayed: boolean };
 
 const requestHash = (input: StartTurnInput) =>
-  createHash('sha256').update(JSON.stringify({ c: input.conversationId, t: input.text })).digest('hex');
+  createHash('sha256')
+    .update(JSON.stringify({ c: input.conversationId, t: input.text, a: [...(input.attachmentIds ?? [])].sort() }))
+    .digest('hex');
 
 async function findByIdempotency(d: Db, actor: Actor, input: StartTurnInput, hash: string): Promise<StartTurnResult | null> {
   const [existing] = await d
@@ -91,6 +96,7 @@ export async function startTurn(actor: Actor, input: StartTurnInput): Promise<St
         .insert(messages)
         .values({ conversationId: conv.id, seq: userSeq, role: 'user', status: 'completed', contentText: text, runId })
         .returning({ id: messages.id });
+      await attachToMessage(tx, actor.userId, userMsg!.id, input.attachmentIds ?? []);
       const [assistantMsg] = await tx
         .insert(messages)
         .values({ conversationId: conv.id, seq: userSeq + 1, role: 'assistant', status: 'pending', runId })
@@ -103,6 +109,9 @@ export async function startTurn(actor: Actor, input: StartTurnInput): Promise<St
         maxLlmAttempts: cfg.llm.maxLlmAttempts,
         pricingVersion: cfg.llm.pricing.version,
         systemPromptVersion: SYSTEM_PROMPT_VERSION,
+        tools: await snapshotTools(tx, actor.userId, conv.id),
+        webSearch: cfg.webSearch,
+        limits: { maxIterations: cfg.limits.maxIterations, maxToolCalls: cfg.limits.maxToolCalls },
       };
       await tx.insert(runs).values({
         id: runId,
@@ -129,7 +138,7 @@ export async function startTurn(actor: Actor, input: StartTurnInput): Promise<St
         entityId: userMsg!.id,
         runId,
         traceId,
-        payload: { conversationId: conv.id, chars: text.length },
+        payload: { conversationId: conv.id, chars: text.length, attachments: input.attachmentIds?.length ?? 0, tools: snapshot.tools?.map((t) => t.key) },
       });
       await enqueueRunInTx(client, runId);
 
@@ -177,6 +186,14 @@ export async function getConversationSnapshot(actor: Actor, conversationId: stri
     async ({ db: tx }) => {
       const conv = await ownedConversation(tx, actor, conversationId);
       const msgs = await tx.select().from(messages).where(eq(messages.conversationId, conv.id)).orderBy(asc(messages.seq));
+      const ids = msgs.map((m) => m.id);
+      const atts = ids.length
+        ? await tx
+            .select({ id: attachments.id, messageId: attachments.messageId, filename: attachments.filename, mimeType: attachments.mimeType, sizeBytes: attachments.sizeBytes })
+            .from(attachments)
+            .where(inArray(attachments.messageId, ids))
+        : [];
+      const srcs = await messageSourcesFor(tx, ids);
       const [active] = await tx
         .select({ id: runs.id, status: runs.status, lastEventSeq: runs.eventSeq })
         .from(runs)
@@ -192,6 +209,8 @@ export async function getConversationSnapshot(actor: Actor, conversationId: stri
             contentText: m.contentText,
             runId: m.runId,
             createdAt: m.createdAt.toISOString(),
+            attachments: atts.filter((a) => a.messageId === m.id).map(({ messageId: _m, ...a }) => a),
+            sources: srcs.filter((s) => s.messageId === m.id).map(({ messageId: _m, ...s }) => s),
           }),
         ),
         activeRun: active ?? null,
