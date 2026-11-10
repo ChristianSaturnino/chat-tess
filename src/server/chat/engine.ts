@@ -1,5 +1,6 @@
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import {
+  contextSummaries,
   messages,
   runSteps,
   runs,
@@ -14,7 +15,7 @@ import type { ErrorDto } from '@/shared/events';
 import { audit } from '../audit/audit';
 import { config, type Pricing } from '../config';
 import { InsufficientCreditsError, markUnknown, release, reserve, settle } from '../credits/credits';
-import { costMicro, reservationMicro } from '../credits/pricing';
+import { costMicro, estimateInputTokens, reservationMicro } from '../credits/pricing';
 import { getLlm } from '../llm';
 import { LlmError, type Citation, type FunctionCall, type LlmItem, type LlmStreamEvent, type LlmToolDef } from '../llm/types';
 import { logger } from '../logger';
@@ -23,6 +24,7 @@ import { linkMessageSources, registerSources } from '../sources/sources';
 import { evaluateEgress } from '../tools/policy';
 import { resolveToolset } from '../tools/registry';
 import { ToolError, type ToolFunction, type ToolProvider, type ToolResult } from '../tools/types';
+import { chunkPrefix, EMPTY_SUMMARY, parseSummary, planCompaction, renderSummary, SUMMARIZER_PROMPT, summarizerInput } from './compactor';
 import { buildContext, SYSTEM_PROMPT } from './context';
 
 class LeaseLostError extends Error {
@@ -250,9 +252,14 @@ async function runLoop(claim: Claim, abort: AbortController, isLeaseLost: () => 
   const { byName, defs } = registerFunctions(toolset.providers);
   const webSearch = toolset.webSearch && claim.cfg.webSearch ? claim.cfg.webSearch : null;
 
+  let forcedCompaction = false;
   try {
     for (;;) {
-      const steps = await loadSteps(db(), claim.runId);
+      let steps = await loadSteps(db(), claim.runId);
+      if (!steps.some((s) => s.kind === 'llm_call') && !steps.some((s) => s.kind === 'compaction' && s.status !== 'running')) {
+        await compactionStep(claim, abort, log, false);
+        steps = await loadSteps(db(), claim.runId);
+      }
       const llmSteps = steps.filter((s) => s.kind === 'llm_call');
       const lastLlm = llmSteps.at(-1);
 
@@ -288,7 +295,19 @@ async function runLoop(claim: Claim, abort: AbortController, isLeaseLost: () => 
       }
 
       const seq = lastLlm && lastLlm.status !== 'completed' ? lastLlm.seq : (steps.at(-1)?.seq ?? 0) + 1;
-      const result = await llmStep(claim, seq, steps, defs, webSearch, abort, isLeaseLost, log);
+      const result = await llmStep(claim, seq, steps, defs, webSearch, abort, isLeaseLost, log, !forcedCompaction);
+      if (result === 'compact') {
+        // Provider rejeitou por contexto longo: uma compactação forçada e uma nova tentativa, sem loop.
+        forcedCompaction = true;
+        if (!(await compactionStep(claim, abort, log, true))) {
+          await withTx(async ({ db: tx }) => {
+            await fence(tx, claim);
+            await finalize(tx, claim, { status: 'failed', error: { code: 'context_too_long', message: 'o contexto excede o limite do modelo e não pôde ser compactado' } });
+          });
+          return 'failed';
+        }
+        continue;
+      }
       if (result !== 'continue') return result;
     }
   } finally {
@@ -331,7 +350,8 @@ async function llmStep(
   abort: AbortController,
   isLeaseLost: () => boolean,
   log: typeof logger,
-): Promise<ExecuteResult | 'continue'> {
+  canForceCompaction: boolean,
+): Promise<ExecuteResult | 'continue' | 'compact'> {
   const cfg = claim.cfg;
   const limits = config().limits;
   const pricing: Pricing = { ...config().llm.pricing, version: cfg.pricingVersion };
@@ -382,6 +402,7 @@ async function llmStep(
           reservedMicro,
           messageId: claim.assistantMessageId,
           baseText: base,
+          summaryVersion: ctx.summaryVersion,
         });
         return { id: att!.id, stepId: step.id, attemptNo, input };
       });
@@ -593,7 +614,8 @@ async function llmStep(
       return 'cancelled';
     }
 
-    const retrying = error.retryable && attempt.attemptNo < cfg.maxLlmAttempts;
+    const recoverContext = error.code === 'context_too_long' && canForceCompaction && attempt.attemptNo < cfg.maxLlmAttempts;
+    const retrying = (error.retryable || recoverContext) && attempt.attemptNo < cfg.maxLlmAttempts;
     const errDto = { code: error.code, message: error.message.slice(0, 500) };
     await withTx(async ({ db: tx }) => {
       await fence(tx, claim);
@@ -624,7 +646,154 @@ async function llmStep(
       }
     });
     log.warn({ error: errDto, retrying }, 'tentativa LLM falhou');
+    if (recoverContext) return 'compact';
     if (!retrying) return 'failed';
+  }
+}
+
+/**
+ * Etapa de compactação: resume o prefixo do histórico em memória estruturada versionada.
+ * A nova versão só passa a valer depois de persistida; falha mantém o contexto anterior.
+ * Devolve true se uma nova memória foi gravada.
+ */
+async function compactionStep(claim: Claim, abort: AbortController, log: typeof logger, force: boolean): Promise<boolean> {
+  const cfg = claim.cfg;
+  if (!cfg.compaction && !force) return false;
+  const [userMsg] = await db().select({ seq: messages.seq }).from(messages).where(eq(messages.id, claim.userMessageId));
+  const plan = await planCompaction(db(), claim.conversationId, userMsg!.seq, {
+    triggerTokens: cfg.compaction?.triggerTokens ?? Number.MAX_SAFE_INTEGER,
+    keepTurns: cfg.compaction?.keepTurns ?? config().limits.compactionKeepTurns,
+    force,
+  });
+  if (!plan) return false;
+
+  const pricing: Pricing = { ...config().llm.pricing, version: cfg.pricingVersion };
+  const llm = getLlm(cfg.provider);
+  const maxOutputTokens = 1_500;
+
+  const stepId = await withTx(async ({ db: tx }) => {
+    await fence(tx, claim);
+    // Compactação interrompida por queda anterior: encerrada e refeita do zero.
+    await tx
+      .update(runSteps)
+      .set({ status: 'failed', finishedAt: new Date(), error: { code: 'worker_lost', message: 'compactação interrompida' } })
+      .where(and(eq(runSteps.runId, claim.runId), eq(runSteps.kind, 'compaction'), eq(runSteps.status, 'running')));
+    const [{ maxSeq }] = (await tx
+      .select({ maxSeq: sql<number>`coalesce(max(${runSteps.seq}), 0)::int` })
+      .from(runSteps)
+      .where(eq(runSteps.runId, claim.runId))) as [{ maxSeq: number }];
+    const [step] = await tx.insert(runSteps).values({ runId: claim.runId, seq: maxSeq + 1, kind: 'compaction', status: 'running' }).returning();
+    await appendEvent(tx, claim.runId, 'compaction_started', {
+      cutoffSeq: plan.cutoffSeq,
+      messages: plan.prefix.length,
+      tokensBefore: plan.tokensBefore,
+      previousVersion: plan.previous?.version ?? null,
+      forced: force,
+    });
+    return step!.id;
+  });
+
+  let summary = plan.previous?.summary ?? EMPTY_SUMMARY;
+  let totalCost = 0;
+  try {
+    for (const chunk of chunkPrefix(plan.prefix)) {
+      const input = summarizerInput(summary, chunk);
+      const inputChars = SUMMARIZER_PROMPT.length + JSON.stringify(input).length;
+      const attemptId = await withTx(async ({ db: tx }) => {
+        if ((await fence(tx, claim)).cancelRequested) throw new CancelRequestedError();
+        const [{ n }] = (await tx.select({ n: sql<number>`count(*)::int` }).from(stepAttempts).where(eq(stepAttempts.stepId, stepId))) as [{ n: number }];
+        const [att] = await tx
+          .insert(stepAttempts)
+          .values({ stepId, attemptNo: n + 1, status: 'running', runVersion: claim.version, model: cfg.model })
+          .returning({ id: stepAttempts.id });
+        await reserve(tx, { userId: claim.userId, attemptId: att!.id, amountMicro: reservationMicro({ inputChars, maxOutputTokens }, pricing) });
+        return att!.id;
+      });
+
+      let text = '';
+      let usage: UsageSnapshot | null = null;
+      try {
+        for await (const ev of llm.stream({
+          model: cfg.model,
+          instructions: SUMMARIZER_PROMPT,
+          input,
+          tools: [],
+          webSearch: null,
+          maxOutputTokens,
+          signal: abort.signal,
+        })) {
+          if (ev.type === 'text_delta') text += ev.text;
+          else if (ev.type === 'completed') usage = ev.usage;
+        }
+        if (!usage) throw new LlmError('stream_ended', 'stream encerrado sem conclusão', 'unknown', false);
+      } catch (err) {
+        const e = err instanceof LlmError ? err : new LlmError('unexpected', err instanceof Error ? err.message : String(err), 'unknown', false);
+        await withTx(async ({ db: tx }) => {
+          await fence(tx, claim);
+          await tx
+            .update(stepAttempts)
+            .set({ status: e.billing === 'unknown' ? 'unknown' : 'failed', error: { code: e.code, message: e.message.slice(0, 500) }, finishedAt: new Date() })
+            .where(eq(stepAttempts.id, attemptId));
+          if (e.billing === 'not_billed') await release(tx, attemptId);
+          else await markUnknown(tx, attemptId);
+        });
+        throw e;
+      }
+      const cost = costMicro(usage, pricing);
+      totalCost += cost;
+      const settledUsage = usage;
+      await withTx(async ({ db: tx }) => {
+        await fence(tx, claim);
+        await settle(tx, { attemptId, userId: claim.userId, model: cfg.model, pricingVersion: pricing.version, usage: settledUsage, costMicro: cost });
+        await tx.update(stepAttempts).set({ status: 'completed', usage: settledUsage, finishedAt: new Date() }).where(eq(stepAttempts.id, attemptId));
+      });
+      summary = parseSummary(text);
+    }
+
+    const tokensAfter = estimateInputTokens(renderSummary(summary).length);
+    await withTx(async ({ db: tx }) => {
+      await fence(tx, claim);
+      const version = (plan.previous?.version ?? 0) + 1;
+      await tx.insert(contextSummaries).values({
+        conversationId: claim.conversationId,
+        version,
+        previousId: plan.previous?.id ?? null,
+        cutoffSeq: plan.cutoffSeq,
+        summary,
+        model: cfg.model,
+        runId: claim.runId,
+        tokensBefore: plan.tokensBefore,
+        tokensAfter,
+        costMicro: totalCost,
+      });
+      await tx
+        .update(runSteps)
+        .set({ status: 'completed', finishedAt: new Date(), checkpoint: { version, cutoffSeq: plan.cutoffSeq } })
+        .where(eq(runSteps.id, stepId));
+      await appendEvent(tx, claim.runId, 'compaction_completed', { version, cutoffSeq: plan.cutoffSeq, tokensBefore: plan.tokensBefore, tokensAfter, costMicro: totalCost });
+      await audit(tx, {
+        actorUserId: claim.userId,
+        action: 'context.compacted',
+        entityType: 'conversation',
+        entityId: claim.conversationId,
+        runId: claim.runId,
+        traceId: claim.traceId,
+        payload: { version, cutoffSeq: plan.cutoffSeq, tokensBefore: plan.tokensBefore, tokensAfter, costMicro: totalCost, forced: force },
+      });
+    });
+    log.info({ cutoffSeq: plan.cutoffSeq, tokensBefore: plan.tokensBefore, tokensAfter }, 'contexto compactado');
+    return true;
+  } catch (err) {
+    if (err instanceof LeaseLostError || err instanceof CancelRequestedError) throw err;
+    const message = err instanceof Error ? err.message : String(err);
+    const code = err instanceof InsufficientCreditsError ? 'insufficient_credits' : err instanceof LlmError ? err.code : 'compaction_error';
+    await withTx(async ({ db: tx }) => {
+      await fence(tx, claim);
+      await tx.update(runSteps).set({ status: 'failed', finishedAt: new Date(), error: { code, message: message.slice(0, 500) } }).where(eq(runSteps.id, stepId));
+      await appendEvent(tx, claim.runId, 'compaction_failed', { error: { code, message: message.slice(0, 500) } });
+    });
+    log.warn({ err }, 'compactação falhou; contexto anterior mantido');
+    return false;
   }
 }
 

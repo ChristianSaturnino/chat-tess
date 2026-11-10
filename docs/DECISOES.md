@@ -42,4 +42,24 @@ Custo aceito: menos código pronto para CSRF/rotação. Mitigação: cookie `htt
 
 **Verificado com a OpenAI real (10/11/2026):** streaming de texto; busca nativa com `url_citation` virando fonte citada; loop de várias etapas com tools MCP e reenvio de reasoning cifrado com `store:false`, sem erro de item ausente. Custo do smoke test: 7 chamadas, US$ 0,012, dos quais US$ 0,01 foi a única busca.
 
+## Bloco 3
+
+**Compactação como etapa do run.** Antes da primeira chamada ao modelo, se a estimativa do contexto (memória atual + mensagens após o corte + anexos) passa do gatilho, as mensagens fora dos últimos turnos são resumidas. A compactação é uma etapa `compaction`, com tentativa, reserva e liquidação próprias, então aparece na execução e no consumo. A memória nova só vale depois de persistida (`context_summaries`, versionada, com corte por `seq`). Se falhar, o contexto anterior é mantido e a resposta segue. Pares de chamada/resultado de tools nunca são cortados, porque pertencem ao run em andamento e não ao histórico.
+
+**Memória visível = memória usada.** O resumo é estruturado (fatos, decisões, pendências, preferências, materiais, narrativa) e o painel mostra exatamente o texto renderizado que o modelo recebe. Cada chamada registra a versão usada (`summaryVersion` em `attempt_started`). Optamos pelo resumo próprio em vez da compactação nativa da OpenAI porque o item nativo é opaco e não poderia ser exibido. Custo aceito: perda de informação e uma chamada extra.
+
+**Contexto longo rejeitado pelo provider.** `context_length_exceeded` libera a reserva, força uma única compactação e permite uma nova tentativa. Se não houver o que compactar, o run falha com erro explícito, sem loop.
+
+**Modo demo** usa um gatilho de compactação menor (`DEMO_COMPACTION_TRIGGER_TOKENS`) com o mesmo algoritmo, para exibir a compactação sem conversas enormes.
+
+**Ver execução persistente.** A timeline vem de `run_events` e `tool_calls` (`/api/runs/:id/timeline`), então sobrevive a recarregar a página. Cada resposta tem um rodapé com chamadas, ferramentas, compactação, custo confirmado e duração. A timeline mostra ações observáveis, nunca o raciocínio do modelo.
+
+**Compartilhamento.** O token aleatório (256 bits) aparece uma vez e o banco guarda só o hash. O snapshot grava a projeção pública no momento da criação. O live recalcula a cada acesso, é recusado na criação se a conversa tem dado privado e deixa de publicar se a conversa passar a ter. A projeção exclui argumentos e resultados de tools, itens do provider, reasoning e auditoria. Referências a Drive, Gmail e anexos aparecem só pelo título. Anexos só são baixáveis se marcados na prévia, e o download revalida o share a cada request, sem URL assinada que sobreviva à revogação.
+
+**Cotas e auditoria.** O papel admin vem de `ADMIN_EMAILS`, com e-mail verificado pelo Google, nunca de dado do cliente. O ajuste de limite é auditado na mesma transação e não pode ficar abaixo do consumo confirmado + reservado. A auditoria é consultável pelo próprio usuário (eventos em que ele é ator) e por admin (todos).
+
+**Markdown seguro.** As respostas são renderizadas com `react-markdown`, sem HTML cru. Imagens viram texto alternativo, para que nada seja carregado de origens externas, e links aceitam só http(s)/mailto.
+
+**Verificado com a OpenAI real:** duas compactações sucessivas numa conversa com busca e tools; o modelo respondeu corretamente sobre fatos que só estavam na memória (versão do PostgreSQL e total do orçamento).
+
 **Ainda não verificado:** OAuth e leitura real de Drive e Gmail (dependem do projeto Google Cloud) e entrada de PDF no modelo escolhido, que a página do modelo não lista explicitamente.

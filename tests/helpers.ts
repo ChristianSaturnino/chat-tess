@@ -13,7 +13,7 @@ export async function resetDb() {
     migrated = true;
   }
   await db().execute(sql`
-    truncate table message_sources, sources, tool_calls, conversation_tools, tool_versions, tools, mcp_servers,
+    truncate table shares, context_summaries, message_sources, sources, tool_calls, conversation_tools, tool_versions, tools, mcp_servers,
       connections, attachments, usage_ledger, credit_reservations, step_attempts, run_steps, run_events, runs,
       messages, conversations, sessions, audit_events, credit_accounts, users restart identity cascade`);
   // truncate não dispara triggers de UPDATE/DELETE; conta global recriada a seguir.

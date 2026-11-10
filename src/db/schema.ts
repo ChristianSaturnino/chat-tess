@@ -100,6 +100,7 @@ export type RunConfigSnapshot = {
   systemPromptVersion: string;
   /** Tools habilitadas congeladas no início do run; revogação ainda é revalidada a cada chamada. */
   tools?: ToolSnapshot[];
+  compaction?: { triggerTokens: number; keepTurns: number };
   webSearch?: { maxCalls: number; feeMicroPerCall: number; tokensPerCall?: number } | null;
   limits?: { maxIterations: number; maxToolCalls: number };
 };
@@ -443,6 +444,74 @@ export const sources = pgTable(
     retrievedAt: createdAt(),
   },
   (t) => [uniqueIndex('sources_run_label_uq').on(t.runId, t.label), uniqueIndex('sources_run_kind_ref_uq').on(t.runId, t.kind, t.ref)],
+);
+
+export type StructuredSummary = {
+  /** Fatos, números e decisões que precisam sobreviver à compactação. */
+  facts: string[];
+  decisions: string[];
+  openQuestions: string[];
+  userPreferences: string[];
+  /** Materiais mencionados (anexos, arquivos, páginas), apenas como referência. */
+  references: string[];
+  narrative: string;
+};
+
+/** Versões da memória resumida. A ativa é a de maior versão; versões anteriores ficam para auditoria. */
+export const contextSummaries = pgTable(
+  'context_summaries',
+  {
+    id: id(),
+    conversationId: uuid('conversation_id')
+      .notNull()
+      .references(() => conversations.id, { onDelete: 'cascade' }),
+    version: integer('version').notNull(),
+    previousId: uuid('previous_id'),
+    /** Mensagens com seq <= cutoff_seq estão representadas pelo resumo e saem do contexto. */
+    cutoffSeq: integer('cutoff_seq').notNull(),
+    summary: jsonb('summary').$type<StructuredSummary>().notNull(),
+    model: text('model').notNull(),
+    runId: uuid('run_id').references(() => runs.id, { onDelete: 'set null' }),
+    tokensBefore: integer('tokens_before').notNull(),
+    tokensAfter: integer('tokens_after').notNull(),
+    costMicro: micro('cost_micro'),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('context_summaries_conv_version_uq').on(t.conversationId, t.version)],
+);
+
+export type ShareProjection = {
+  title: string | null;
+  messages: {
+    role: 'user' | 'assistant';
+    seq: number;
+    contentText: string;
+    createdAt: string;
+    attachments: { id: string; filename: string; mimeType: string }[];
+    sources: { label: string; kind: string; title: string | null; url: string | null; cited: boolean }[];
+    execution: { steps: { kind: string; name: string | null; status: string; durationMs: number | null }[]; costMicro: number } | null;
+  }[];
+};
+
+/** Token aleatório entregue uma vez; o banco guarda só o hash. */
+export const shares = pgTable(
+  'shares',
+  {
+    id: id(),
+    conversationId: uuid('conversation_id')
+      .notNull()
+      .references(() => conversations.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull(),
+    mode: text('mode', { enum: ['snapshot', 'live'] }).notNull(),
+    /** Snapshot: projeção congelada na criação. Live: null (calculada a cada leitura). */
+    snapshot: jsonb('snapshot').$type<ShareProjection | null>(),
+    allowedAttachmentIds: uuid('allowed_attachment_ids').array().notNull().default(sql`'{}'::uuid[]`),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('shares_token_hash_uq').on(t.tokenHash), index('shares_conversation_idx').on(t.conversationId)],
 );
 
 export const messageSources = pgTable(

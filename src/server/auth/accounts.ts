@@ -30,14 +30,19 @@ export async function createDemoUser() {
 export async function upsertGoogleUser(profile: { sub: string; email: string | null; name: string | null }) {
   return withTx(async ({ db: tx }) => {
     const [existing] = await tx.select().from(users).where(eq(users.googleSub, profile.sub)).for('update');
+    // Papel admin vem da configuração (e-mail verificado pelo Google), nunca de dado do cliente.
+    const role = profile.email && config().adminEmails.has(profile.email.toLowerCase()) ? ('admin' as const) : ('user' as const);
     let userId: string;
     if (existing) {
       userId = existing.id;
-      await tx.update(users).set({ email: profile.email, name: profile.name }).where(eq(users.id, userId));
+      await tx.update(users).set({ email: profile.email, name: profile.name, role }).where(eq(users.id, userId));
+      if (existing.role !== role) {
+        await audit(tx, { actorUserId: null, action: 'user.role_changed', entityType: 'user', entityId: userId, payload: { from: existing.role, to: role } });
+      }
     } else {
       const [created] = await tx
         .insert(users)
-        .values({ kind: 'google', googleSub: profile.sub, email: profile.email, name: profile.name })
+        .values({ kind: 'google', googleSub: profile.sub, email: profile.email, name: profile.name, role })
         .returning();
       userId = created!.id;
       await createUserAccount(tx, userId, config().credits.userLimitMicro);

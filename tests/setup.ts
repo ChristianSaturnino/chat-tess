@@ -7,3 +7,7 @@ process.env.LOG_LEVEL = 'silent';
 process.env.APP_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString('base64');
 process.env.LOCAL_STORAGE_DIR = '.data/test-uploads';
 process.env.SSRF_ALLOW_HOSTS = '';
+process.env.DEMO_COMPACTION_TRIGGER_TOKENS = '600';
+process.env.COMPACTION_TRIGGER_TOKENS = '600';
+process.env.COMPACTION_KEEP_TURNS = '2';
+process.env.ADMIN_EMAILS = 'admin@exemplo.test';

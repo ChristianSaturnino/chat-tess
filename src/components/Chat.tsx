@@ -4,13 +4,17 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ConversationSnapshotDto, MessageDto, RunEventDto } from '@/shared/events';
 import { api } from './api';
 import { Connectors } from './Connectors';
+import { describeEvent, ExecutionFooter, ExecutionPanel } from './Execution';
+import { Markdown } from './Markdown';
+import { MemoryPanel } from './Memory';
+import { SharePanel } from './Share';
+import { credits } from './ui';
 
 type ConvSummary = { id: string; title: string | null };
 type Credits = { availableMicro: number; reservedMicro: number; settledMicro: number; limitMicro: number } | null;
 type ToolItem = { key: string; label: string; kind: string; available: boolean; unavailableReason?: string; enabled: boolean };
 type PendingFile = { id: string; filename: string; mimeType: string };
 
-const credits = (micro: number) => (micro / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 2 });
 
 function applyEvent(msgs: MessageDto[], ev: RunEventDto): MessageDto[] {
   const p = ev.payload as Record<string, unknown>;
@@ -35,47 +39,6 @@ function applyEvent(msgs: MessageDto[], ev: RunEventDto): MessageDto[] {
         return m;
     }
   });
-}
-
-/** Linha legível da timeline; deltas de texto não aparecem. */
-function describeEvent(e: RunEventDto): string | null {
-  const p = e.payload as Record<string, any>;
-  switch (e.type) {
-    case 'run_queued':
-      return 'Na fila';
-    case 'run_started':
-      return p.resumed ? `Retomado por outro worker (versão ${p.version})` : 'Execução iniciada';
-    case 'attempt_started':
-      return `Chamada ao modelo ${p.model} (tentativa ${p.attemptNo}, reserva ${credits(p.reservedMicro)} créditos)`;
-    case 'attempt_completed':
-      return `Modelo respondeu em ${(p.durationMs / 1000).toFixed(1)} s · ${p.usage.inputTokens} tokens entrada / ${p.usage.outputTokens} saída · ${credits(p.costMicro)} créditos`;
-    case 'attempt_failed':
-      return `Tentativa falhou: ${p.error.message}${p.retrying ? ' (nova tentativa)' : ''} · cobrança ${p.billing === 'released' ? 'liberada' : 'desconhecida'}`;
-    case 'attempt_interrupted':
-      return 'Tentativa interrompida por queda do worker · consumo desconhecido';
-    case 'web_search':
-      return p.status === 'searching' ? 'Buscando na web…' : 'Busca na web concluída';
-    case 'tool_call_started':
-      return `Ferramenta ${p.name} ${p.arguments}`;
-    case 'tool_call_completed': {
-      const status = { completed: 'ok', failed: 'falhou', blocked: 'bloqueada', unknown: 'resultado desconhecido' }[p.status as string];
-      return `→ ${p.name}: ${status} em ${p.durationMs} ms${p.sourceLabels.length ? ` · fontes ${p.sourceLabels.join(', ')}` : ''}${p.error ? ` · ${p.error.message}` : ''}`;
-    }
-    case 'policy_blocked':
-      return `Política bloqueou ${p.name}: ${p.message}`;
-    case 'cancel_requested':
-      return 'Cancelamento solicitado';
-    case 'run_completed':
-      return `Concluído · total ${credits(p.costMicro)} créditos`;
-    case 'run_failed':
-      return `Falhou: ${p.error.message}`;
-    case 'run_cancelled':
-      return 'Cancelado';
-    case 'run_interrupted':
-      return `Interrompido: ${p.error.message}`;
-    default:
-      return null;
-  }
 }
 
 function Sources({ sources }: { sources: MessageDto['sources'] }) {
@@ -110,7 +73,7 @@ function Sources({ sources }: { sources: MessageDto['sources'] }) {
   );
 }
 
-export function Chat({ user }: { user: { name: string | null; kind: string } }) {
+export function Chat({ user }: { user: { name: string | null; kind: string; role: string } }) {
   const [convs, setConvs] = useState<ConvSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [msgs, setMsgs] = useState<MessageDto[]>([]);
@@ -124,6 +87,7 @@ export function Chat({ user }: { user: { name: string | null; kind: string } }) 
   const [tools, setTools] = useState<ToolItem[]>([]);
   const [showTools, setShowTools] = useState(false);
   const [showConnectors, setShowConnectors] = useState(false);
+  const [panel, setPanel] = useState<{ kind: 'execution'; runId: string } | { kind: 'memory' } | { kind: 'share' } | null>(null);
   const bottom = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -301,16 +265,27 @@ export function Chat({ user }: { user: { name: string | null; kind: string } }) 
           </button>
           <div>{user.name ?? 'Usuário'} {user.kind === 'demo' && '(demo)'}</div>
           {credit && (
-            <div>
-              {credits(credit.availableMicro)} créditos disponíveis
-              {credit.reservedMicro > 0 && ` · ${credits(credit.reservedMicro)} reservados`}
+            <div title="1 crédito = US$ 0,001">
+              <div>{credits(credit.availableMicro)} de {credits(credit.limitMicro)} créditos disponíveis</div>
+              <div>{credits(credit.settledMicro)} confirmados · {credits(credit.reservedMicro)} reservados</div>
             </div>
           )}
-          <button onClick={logout} className="underline">Sair</button>
+          <div className="flex gap-3">
+            <a href="/audit" className="underline">Auditoria</a>
+            {user.role === 'admin' && <a href="/admin" className="underline">Admin</a>}
+            <button onClick={logout} className="underline">Sair</button>
+          </div>
         </div>
       </aside>
 
       <main className="flex min-w-0 flex-1 flex-col">
+        {activeId && (
+          <header className="flex items-center gap-2 border-b border-[var(--border)] px-4 py-2 text-sm">
+            <span className="min-w-0 flex-1 truncate font-medium">{convs.find((c) => c.id === activeId)?.title ?? 'Nova conversa'}</span>
+            <button onClick={() => setPanel({ kind: 'memory' })} className="rounded border border-[var(--border)] px-2 py-1 text-xs">Memória</button>
+            <button onClick={() => setPanel({ kind: 'share' })} className="rounded border border-[var(--border)] px-2 py-1 text-xs">Compartilhar</button>
+          </header>
+        )}
         <div className="flex-1 overflow-y-auto">
           <div className="mx-auto max-w-3xl space-y-4 px-4 py-6">
             {msgs.length === 0 && <p className="text-center text-sm text-[var(--muted)]">Comece uma conversa.</p>}
@@ -329,27 +304,31 @@ export function Chat({ user }: { user: { name: string | null; kind: string } }) 
                   className={
                     m.role === 'user'
                       ? 'max-w-[85%] whitespace-pre-wrap break-words rounded-2xl bg-[var(--accent)] px-4 py-2 text-white'
-                      : 'whitespace-pre-wrap break-words'
+                      : 'break-words'
                   }
                 >
-                  {m.contentText || (m.status === 'pending' || m.status === 'streaming' ? '…' : '')}
+                  {m.role === 'assistant' && m.contentText ? (
+                    <Markdown text={m.contentText} />
+                  ) : (
+                    m.contentText || (m.status === 'pending' || m.status === 'streaming' ? '…' : '')
+                  )}
                   {m.role === 'assistant' && m.status !== 'completed' && m.status !== 'streaming' && m.status !== 'pending' && (
                     <span className="ml-2 text-xs text-[var(--muted)]">[{m.status === 'cancelled' ? 'cancelada' : 'falhou'}]</span>
                   )}
                 </div>
                 {m.role === 'assistant' && <Sources sources={m.sources} />}
+                {m.role === 'assistant' && run && m.runId === run.id && timeline.length > 0 && (
+                  <ol className="mt-1 space-y-0.5 text-xs text-[var(--muted)]" aria-live="polite">
+                    {timeline.map((e) => (
+                      <li key={e.seq} className="break-words">{e.text}</li>
+                    ))}
+                  </ol>
+                )}
+                {m.role === 'assistant' && m.execution && !(run && m.runId === run.id) && (
+                  <ExecutionFooter execution={m.execution} onOpen={() => setPanel({ kind: 'execution', runId: m.execution!.runId })} />
+                )}
               </div>
             ))}
-            {timeline.length > 0 && (
-              <details className="text-xs text-[var(--muted)]" open={!!run}>
-                <summary>Ver execução ({timeline.length} etapas)</summary>
-                <ol className="mt-1 space-y-0.5">
-                  {timeline.map((e) => (
-                    <li key={e.seq} className="break-words">{e.text}</li>
-                  ))}
-                </ol>
-              </details>
-            )}
             <div ref={bottom} />
           </div>
         </div>
@@ -425,6 +404,9 @@ export function Chat({ user }: { user: { name: string | null; kind: string } }) 
         </div>
       </main>
 
+      {panel?.kind === 'execution' && <ExecutionPanel runId={panel.runId} onClose={() => setPanel(null)} />}
+      {panel?.kind === 'memory' && activeId && <MemoryPanel conversationId={activeId} onClose={() => setPanel(null)} />}
+      {panel?.kind === 'share' && activeId && <SharePanel conversationId={activeId} onClose={() => setPanel(null)} />}
       {showConnectors && (
         <Connectors
           onClose={() => {

@@ -155,6 +155,7 @@ function classify(err: unknown): LlmError {
   if (err instanceof APIError) {
     const status = err.status ?? 0;
     if (status === 429) return new LlmError('rate_limited', err.message, 'not_billed', true);
+    if (err.code === 'context_length_exceeded') return new LlmError('context_too_long', err.message, 'not_billed', false);
     if (status >= 400 && status < 500) return new LlmError(`http_${status}`, err.message, 'not_billed', false);
     return new LlmError(`http_${status}`, err.message, 'unknown', true);
   }

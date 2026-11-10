@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { and, asc, desc, eq, gte, inArray, sql } from 'drizzle-orm';
-import { attachments, conversations, messages, runs, ACTIVE_RUN_STATUS, type RunConfigSnapshot } from '@/db/schema';
+import { attachments, conversations, messages, runs, users, ACTIVE_RUN_STATUS, type RunConfigSnapshot } from '@/db/schema';
 import { db, isUniqueViolation, withTx, type Db } from '@/db/client';
 import type { ConversationSnapshotDto, MessageDto } from '@/shared/events';
 import { audit } from '../audit/audit';
@@ -8,6 +8,7 @@ import { config } from '../config';
 import { AppError, notFound } from '../errors';
 import { SYSTEM_PROMPT_VERSION } from '../chat/context';
 import { messageSourcesFor } from '../sources/sources';
+import { runSummaries } from './timeline';
 import { attachToMessage } from '../storage/attachments';
 import { snapshotTools } from '../tools/registry';
 import { appendEvent } from './events';
@@ -24,6 +25,11 @@ async function ownedConversation(d: Db, actor: Actor, conversationId: string, lo
   // 404 também para conversa de outro usuário: não revelar existência.
   if (!conv) throw notFound('conversa');
   return conv;
+}
+
+async function isDemoUser(d: Db, userId: string) {
+  const [u] = await d.select({ kind: users.kind }).from(users).where(eq(users.id, userId));
+  return u?.kind === 'demo';
 }
 
 export async function createConversation(actor: Actor) {
@@ -110,6 +116,10 @@ export async function startTurn(actor: Actor, input: StartTurnInput): Promise<St
         pricingVersion: cfg.llm.pricing.version,
         systemPromptVersion: SYSTEM_PROMPT_VERSION,
         tools: await snapshotTools(tx, actor.userId, conv.id),
+        compaction: {
+          triggerTokens: (await isDemoUser(tx, actor.userId)) ? cfg.limits.demoCompactionTriggerTokens : cfg.limits.compactionTriggerTokens,
+          keepTurns: cfg.limits.compactionKeepTurns,
+        },
         webSearch: cfg.webSearch,
         limits: { maxIterations: cfg.limits.maxIterations, maxToolCalls: cfg.limits.maxToolCalls },
       };
@@ -194,6 +204,7 @@ export async function getConversationSnapshot(actor: Actor, conversationId: stri
             .where(inArray(attachments.messageId, ids))
         : [];
       const srcs = await messageSourcesFor(tx, ids);
+      const summaries = await runSummaries(tx, [...new Set(msgs.filter((m) => m.role === 'assistant' && m.runId).map((m) => m.runId!))]);
       const [active] = await tx
         .select({ id: runs.id, status: runs.status, lastEventSeq: runs.eventSeq })
         .from(runs)
@@ -211,6 +222,7 @@ export async function getConversationSnapshot(actor: Actor, conversationId: stri
             createdAt: m.createdAt.toISOString(),
             attachments: atts.filter((a) => a.messageId === m.id).map(({ messageId: _m, ...a }) => a),
             sources: srcs.filter((s) => s.messageId === m.id).map(({ messageId: _m, ...s }) => s),
+            execution: m.role === 'assistant' && m.runId ? (summaries.get(m.runId) ?? null) : null,
           }),
         ),
         activeRun: active ?? null,

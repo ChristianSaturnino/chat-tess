@@ -11,6 +11,12 @@ export class FakeAdapter implements LlmAdapter {
   readonly provider = 'fake';
   constructor(private readonly delayMs: number) {}
 
+  private async *summarize(req: LlmRequest, text: string): AsyncIterable<LlmStreamEvent> {
+    const out = fakeSummary(text);
+    yield { type: 'text_delta', text: out };
+    yield { type: 'completed', status: 'completed', usage: usage(req, Math.ceil(out.length / 4)), output: [], functionCalls: [], citations: [], webSearchCalls: 0 };
+  }
+
   async *stream(req: LlmRequest): AsyncIterable<LlmStreamEvent> {
     const lastUserIdx = req.input.findLastIndex((i) => i.kind === 'message' && i.role === 'user');
     const lastUser = req.input[lastUserIdx] as Extract<LlmItem, { kind: 'message' }> | undefined;
@@ -18,6 +24,11 @@ export class FakeAdapter implements LlmAdapter {
     if (userText.includes('[[fail:4xx]]')) throw new LlmError('http_400', 'falha simulada 4xx', 'not_billed', false);
 
     yield { type: 'request_id', id: `fake_${Date.now()}` };
+
+    if (req.instructions.startsWith('COMPACTADOR_DE_CONTEXTO')) {
+      yield* this.summarize(req, userText);
+      return;
+    }
 
     const after = req.input.slice(lastUserIdx + 1);
     const outputs = after.filter((i): i is Extract<LlmItem, { kind: 'function_call_output' }> => i.kind === 'function_call_output');
@@ -71,6 +82,20 @@ export class FakeAdapter implements LlmAdapter {
       webSearchCalls: 0,
     };
   }
+}
+
+/**
+ * Resumo determinístico: mantém os fatos da memória anterior e acrescenta cada mensagem do usuário
+ * do trecho novo como fato. Suficiente para testar preservação entre compactações sucessivas.
+ */
+function fakeSummary(text: string) {
+  const prevMatch = text.match(/MEMÓRIA ANTERIOR:\n(\{.*?\})\n\nTRECHO NOVO:/s);
+  let facts: string[] = [];
+  try {
+    facts = prevMatch ? (JSON.parse(prevMatch[1]!).facts ?? []) : [];
+  } catch {}
+  for (const m of text.matchAll(/#\d+ Usuário: (.+)/g)) facts.push(m[1]!.slice(0, 200));
+  return JSON.stringify({ facts, decisions: [], openQuestions: [], userPreferences: [], references: [], narrative: `Memória com ${facts.length} fato(s).` });
 }
 
 function parseToolRequests(text: string) {

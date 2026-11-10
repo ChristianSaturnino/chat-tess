@@ -15,7 +15,12 @@ export type RunEventPayloads = {
     messageId: string;
     /** Texto já confirmado por etapas anteriores do run; o parcial desta etapa recomeça depois dele. */
     baseText?: string;
+    /** Versão da memória resumida enviada nesta chamada (null: histórico completo). */
+    summaryVersion?: number | null;
   };
+  compaction_started: { cutoffSeq: number; messages: number; tokensBefore: number; previousVersion: number | null; forced: boolean };
+  compaction_completed: { version: number; cutoffSeq: number; tokensBefore: number; tokensAfter: number; costMicro: number };
+  compaction_failed: { error: ErrorDto };
   web_search: { attemptId: string; itemId: string; status: 'searching' | 'completed' };
   tool_calls_requested: { stepId: string; calls: { callId: string; name: string }[] };
   tool_call_started: { callId: string; name: string; toolKey: string; arguments: string };
@@ -66,6 +71,17 @@ export type MessageDto = {
   attachments: { id: string; filename: string; mimeType: string; sizeBytes: number }[];
   /** cited=true: referenciada na resposta; false: consultada sem citação. */
   sources: { label: string; kind: string; title: string | null; url: string | null; excerpt: string | null; cited: boolean }[];
+  execution: {
+    runId: string;
+    status: string;
+    durationMs: number | null;
+    costMicro: number;
+    inputTokens: number;
+    outputTokens: number;
+    llmCalls: number;
+    toolCalls: number;
+    compactions: number;
+  } | null;
 };
 
 export type ConversationSnapshotDto = {

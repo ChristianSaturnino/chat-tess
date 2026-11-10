@@ -35,6 +35,14 @@ const envSchema = z.object({
   WEB_SEARCH_TOKENS_PER_CALL: intFromEnv(10_000),
   /** Esforço de raciocínio (modelos de reasoning); tokens de raciocínio são cobrados como saída. */
   OPENAI_REASONING_EFFORT: z.enum(['none', 'low', 'medium', 'high']).optional(),
+  /** Compacta o histórico quando a estimativa de entrada passa deste valor. */
+  COMPACTION_TRIGGER_TOKENS: intFromEnv(60_000),
+  /** Visitantes demo usam um gatilho menor para exibir a compactação sem conversas longas. */
+  DEMO_COMPACTION_TRIGGER_TOKENS: intFromEnv(2_500),
+  /** Turnos mais recentes mantidos completos (inclui o atual). */
+  COMPACTION_KEEP_TURNS: intFromEnv(2),
+  /** E-mails Google com papel admin, separados por vírgula. */
+  ADMIN_EMAILS: z.string().default(''),
   MAX_ITERATIONS: intFromEnv(6),
   MAX_TOOL_CALLS: intFromEnv(12),
 });
@@ -77,6 +85,7 @@ function load() {
   return {
     env,
     isProd: env.NODE_ENV === 'production',
+    adminEmails: new Set(env.ADMIN_EMAILS.split(',').map((e) => e.trim().toLowerCase()).filter(Boolean)),
     llm,
     credits: {
       userLimitMicro: env.CREDITS_USER_LIMIT_MICRO,
@@ -91,6 +100,9 @@ function load() {
       heartbeatMs: 10_000,
       deltaFlushMs: 120,
       deltaFlushChars: 400,
+      compactionTriggerTokens: env.COMPACTION_TRIGGER_TOKENS,
+      demoCompactionTriggerTokens: env.DEMO_COMPACTION_TRIGGER_TOKENS,
+      compactionKeepTurns: env.COMPACTION_KEEP_TURNS,
       maxIterations: env.MAX_ITERATIONS,
       maxToolCalls: env.MAX_TOOL_CALLS,
       toolConcurrency: 4,
