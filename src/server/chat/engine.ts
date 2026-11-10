@@ -20,7 +20,7 @@ import { getLlm } from '../llm';
 import { LlmError, type Citation, type FunctionCall, type LlmItem, type LlmStreamEvent, type LlmToolDef } from '../llm/types';
 import { logger } from '../logger';
 import { appendEvent } from '../runs/events';
-import { linkMessageSources, registerSources } from '../sources/sources';
+import { conversationHasPrivateData, linkMessageSources, registerSources } from '../sources/sources';
 import { evaluateEgress } from '../tools/policy';
 import { resolveToolset } from '../tools/registry';
 import { ToolError, type ToolFunction, type ToolProvider, type ToolResult } from '../tools/types';
@@ -346,7 +346,7 @@ async function llmStep(
   seq: number,
   steps: StepRow[],
   toolDefs: LlmToolDef[],
-  webSearch: { maxCalls: number; feeMicroPerCall: number; tokensPerCall?: number } | null,
+  requestedWebSearch: { maxCalls: number; feeMicroPerCall: number; tokensPerCall?: number } | null,
   abort: AbortController,
   isLeaseLost: () => boolean,
   log: typeof logger,
@@ -358,6 +358,10 @@ async function llmStep(
   const llm = getLlm(cfg.provider);
   const prior = runItems(steps);
   const base = joinText(prior.baseText);
+  // A busca nativa roda no provider, fora da política local: pode abrir URLs e enviar consultas
+  // escolhidas pelo modelo. Com dado privado na conversa, ela deixa de ser oferecida.
+  const privateContext = requestedWebSearch ? await conversationHasPrivateData(db(), claim.conversationId) : false;
+  const webSearch = privateContext ? null : requestedWebSearch;
 
   for (;;) {
     let prepared: { id: string; stepId: string; attemptNo: number; input: LlmItem[] } | null;
@@ -394,6 +398,12 @@ async function llmStep(
 
         // Nova geração substitui explicitamente qualquer texto parcial desta etapa.
         await tx.update(messages).set({ status: 'streaming', contentText: base }).where(eq(messages.id, claim.assistantMessageId));
+        if (privateContext && attemptNo === 1) {
+          await appendEvent(tx, claim.runId, 'policy_restricted', {
+            tool: 'web_search',
+            message: 'busca na web desativada nesta etapa: a conversa contém dados privados (anexos, Drive ou Gmail)',
+          });
+        }
         await appendEvent(tx, claim.runId, 'attempt_started', {
           attemptId: att!.id,
           stepId: step.id,

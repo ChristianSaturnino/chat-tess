@@ -33,6 +33,8 @@ export type RunEventPayloads = {
     error: ErrorDto | null;
   };
   policy_blocked: { callId: string; name: string; code: string; message: string };
+  /** Ferramenta retirada da chamada pela política (não chegou a ser oferecida ao modelo). */
+  policy_restricted: { tool: string; message: string };
   text_delta: { attemptId: string; messageId: string; text: string };
   attempt_completed: { attemptId: string; usage: UsageDto; costMicro: number; durationMs: number };
   attempt_failed: { attemptId: string; error: ErrorDto; billing: BillingOutcome; retrying: boolean };

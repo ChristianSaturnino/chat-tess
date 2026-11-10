@@ -41,6 +41,8 @@ export function describeEvent(e: RunEventDto): string | null {
     }
     case 'policy_blocked':
       return `Política bloqueou ${p.name}: ${p.message}`;
+    case 'policy_restricted':
+      return `Política: ${p.message}`;
     case 'cancel_requested':
       return 'Cancelamento solicitado';
     case 'run_completed':

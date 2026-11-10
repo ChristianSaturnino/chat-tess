@@ -5,6 +5,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { closeDb, db } from '@/db/client';
 import { messageSources, messages, runEvents, runs, sources, toolCalls } from '@/db/schema';
 import { executeRun } from '@/server/chat/engine';
+import { setLlmOverride } from '@/server/llm';
+import { FakeAdapter } from '@/server/llm/fake';
+import type { LlmRequest } from '@/server/llm/types';
 import { createConversation, startTurn } from '@/server/runs/commands';
 import { stopBoss } from '@/server/runs/queue';
 import { uploadAttachment } from '@/server/storage/attachments';
@@ -167,6 +170,45 @@ describe('política contra exfiltração', () => {
     const m = await msg(t.assistantMessageId);
     expect(m.contentText).toContain('orcamento.png');
     expect(m.contentText).toContain('Bloqueado');
+  });
+});
+
+describe('busca nativa e dado privado', () => {
+  async function runCapturingWebSearch(attachmentIds: string[], actor: { userId: string }, conversationId: string) {
+    const t = await startTurn(actor, { conversationId, text: 'pesquise algo', idempotencyKey: randomUUID(), attachmentIds });
+    // Simula a configuração com busca nativa disponível (provider real), sem depender de rede.
+    await db()
+      .update(runs)
+      .set({
+        configSnapshot: sql`jsonb_set(jsonb_set(config_snapshot, '{webSearch}', '{"maxCalls":2,"feeMicroPerCall":10000}'), '{tools}', '[{"key":"builtin:web_search","version":"v1"}]')`,
+      })
+      .where(eq(runs.id, t.runId));
+    const seen: (LlmRequest['webSearch'])[] = [];
+    const normal = new FakeAdapter(0);
+    setLlmOverride({
+      provider: 'test',
+      async *stream(req: LlmRequest) {
+        seen.push(req.webSearch);
+        yield* normal.stream(req);
+      },
+    });
+    await executeRun(t.runId, 'w1');
+    setLlmOverride(undefined);
+    return { seen, runId: t.runId };
+  }
+
+  it('sem dado privado a busca nativa é oferecida', async () => {
+    const { actor, conv } = await setup();
+    const { seen } = await runCapturingWebSearch([], actor, conv.id);
+    expect(seen[0]).toEqual({ maxCalls: 2 });
+  });
+
+  it('com anexo na conversa a busca nativa não chega ao modelo e o evento é registrado', async () => {
+    const { actor, conv } = await setup();
+    const att = await uploadAttachment(actor.userId, 'contrato.png', TINY_PNG);
+    const { seen, runId } = await runCapturingWebSearch([att.id], actor, conv.id);
+    expect(seen[0]).toBeNull();
+    expect(await types(runId)).toContain('policy_restricted');
   });
 });
 

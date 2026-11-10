@@ -62,4 +62,8 @@ Custo aceito: menos código pronto para CSRF/rotação. Mitigação: cookie `htt
 
 **Verificado com a OpenAI real:** duas compactações sucessivas numa conversa com busca e tools; o modelo respondeu corretamente sobre fatos que só estavam na memória (versão do PostgreSQL e total do orçamento).
 
-**Ainda não verificado:** OAuth e leitura real de Drive e Gmail (dependem do projeto Google Cloud) e entrada de PDF no modelo escolhido, que a página do modelo não lista explicitamente.
+**Busca nativa também é saída de dados.** No teste real, com Drive e Gmail no contexto, pedimos para "abrir" uma URL com dados na query string. O modelo usou a busca nativa, que roda no provider e não passava pela política local, e a URL foi acessada. Correção: com dado privado na conversa, a busca nativa deixa de ser oferecida ao modelo naquela etapa (evento `policy_restricted`). O modelo passa a recorrer ao `scrape_page`, que a política bloqueia. Teste de regressão em `tests/tools.test.ts`.
+
+**Verificado com Google real (10/11/2026), conta de teste dedicada:** login com papel admin via `ADMIN_EMAILS`; conexões Drive e Gmail separadas (autorização incremental, refresh token cifrado); cenário integrado lendo um Google Docs e um e-mail, consultando o catálogo MCP e calculando o orçamento, com as três fontes citadas e o total correto; bloqueio da tentativa de exfiltração; tela de cotas do admin.
+
+**Ainda não verificado:** entrada de PDF no modelo escolhido (a página do modelo não lista explicitamente), refresh real após a expiração do access token e o fluxo `reconnect_required` com revogação feita no Google.
