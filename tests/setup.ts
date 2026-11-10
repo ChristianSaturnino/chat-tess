@@ -1,0 +1,6 @@
+// Testes usam o banco tess_test (Postgres real via docker compose).
+process.env.DATABASE_URL = process.env.TEST_DATABASE_URL ?? 'postgres://tess:tess@localhost:5433/tess_test';
+process.env.LLM_PROVIDER = 'fake';
+process.env.FAKE_LLM_DELAY_MS = '0';
+process.env.TURNS_PER_MINUTE = '1000';
+process.env.LOG_LEVEL = 'silent';
