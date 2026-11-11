@@ -1,46 +1,41 @@
-# Deploy (Railway + Cloudflare R2)
+# Deploy (Railway)
 
-Uma imagem Docker serve três serviços. O comando de início define o papel de cada um. O Postgres é o do próprio Railway.
+Uma imagem Docker serve três serviços. O comando de início define o papel de cada um. Postgres e o bucket de anexos são recursos do próprio Railway.
 
 ```text
 Railway project
-├── Postgres            (plugin do Railway)
+├── Postgres            banco, fila (pg-boss), eventos e consumo
+├── uploads             bucket privado S3 para anexos (web e worker não compartilham disco)
 ├── web        → npm run start      domínio público, health check /api/health
 ├── worker     → npm run worker     sem domínio
 └── mcp-demo   → npm run mcp-demo   domínio público, token obrigatório
-Cloudflare R2 → bucket privado para anexos (web e worker não compartilham disco)
 ```
 
-## 1. Cloudflare R2
-
-1. Cloudflare → **R2** → **Create bucket** com o nome `chat-tess-uploads`, sem acesso público.
-2. **R2 → Manage API tokens → Create API token**, com permissão **Object Read & Write** restrita a esse bucket.
-3. Anote `Account ID`, `Access Key ID` e `Secret Access Key`. O secret só aparece uma vez.
-
-## 2. Railway
+## 1. Projeto e recursos
 
 1. **New Project → Deploy from GitHub repo**, escolhendo este repositório. Esse primeiro serviço será o `web`.
-2. **+ New → Database → PostgreSQL**.
-3. Duplique o serviço do repositório duas vezes e renomeie as cópias para `worker` e `mcp-demo`.
-4. Em cada serviço, abra **Settings**:
+2. **+ Create → Database → PostgreSQL**.
+3. **+ Create → Bucket**, com o nome `uploads`. O bucket é privado; a aplicação lê e grava pelas credenciais.
+4. **+ Create → GitHub Repo** duas vezes, com o mesmo repositório, para criar `worker` e `mcp-demo`.
+5. Em cada serviço do repositório, abra **Settings**:
 
-| Serviço | Start command | Pre-deploy command | Health check | Domínio |
+| Serviço | Custom start command | Pre-deploy command | Health check path | Networking |
 |---|---|---|---|---|
 | web | `npm run start` | `npm run db:migrate` | `/api/health` | Generate domain |
-| worker | `npm run worker` | — | — | não |
+| worker | `npm run worker` | — | — | sem domínio |
 | mcp-demo | `npm run mcp-demo` | — | — | Generate domain |
 
 O Dockerfile é detectado automaticamente.
 
-## 3. Variáveis de ambiente
+## 2. Variáveis de ambiente
 
-Em **web** e **worker**, com os mesmos valores. Use **Shared Variables** para não duplicar:
+Em **web** e **worker**, com os mesmos valores. As referências `${{...}}` são resolvidas pelo Railway.
 
 ```text
 NODE_ENV=production
 DATABASE_URL=${{Postgres.DATABASE_URL}}
-APP_URL=https://<domínio-do-web>.up.railway.app
-APP_ENCRYPTION_KEY=<novo: node -e "console.log(require('crypto').randomBytes(32).toString('base64'))">
+APP_URL=https://${{web.RAILWAY_PUBLIC_DOMAIN}}
+APP_ENCRYPTION_KEY=<novo, ver abaixo>
 LLM_PROVIDER=openai
 OPENAI_API_KEY=...
 OPENAI_MODEL=gpt-6-luna
@@ -55,10 +50,11 @@ CREDITS_GLOBAL_LIMIT_MICRO=3000000
 CREDITS_USER_LIMIT_MICRO=500000
 CREDITS_DEMO_LIMIT_MICRO=150000
 DEMO_MAX_SESSIONS_PER_HOUR=20
-R2_BUCKET=chat-tess-uploads
-R2_ACCOUNT_ID=...
-R2_ACCESS_KEY_ID=...
-R2_SECRET_ACCESS_KEY=...
+S3_ENDPOINT=${{uploads.ENDPOINT}}
+S3_BUCKET=${{uploads.BUCKET}}
+S3_REGION=${{uploads.REGION}}
+S3_ACCESS_KEY_ID=${{uploads.ACCESS_KEY_ID}}
+S3_SECRET_ACCESS_KEY=${{uploads.SECRET_ACCESS_KEY}}
 ```
 
 Em **mcp-demo**:
@@ -68,13 +64,14 @@ NODE_ENV=production
 MCP_DEMO_TOKEN=<segredo aleatório>
 ```
 
-- `APP_ENCRYPTION_KEY` de produção deve ser diferente da local. Trocá-la depois invalida tokens e secrets já gravados.
-- Cotas: uma resposta com busca na web custa cerca de 10 créditos (US$ 0,01), e uma só de texto, menos de 1. Com 150 créditos, um visitante demo faz uns 15 pedidos com busca ou centenas sem. O cap global de 3.000 créditos (US$ 3) protege o saldo da conta; ajuste-o ao saldo real e use **/admin** para dar mais cota a um avaliador.
+- Gere `APP_ENCRYPTION_KEY` e `MCP_DEMO_TOKEN` no seu terminal com `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`. A chave de produção deve ser diferente da local; trocá-la depois invalida tokens e secrets já gravados.
+- Se a aba **Credentials** do bucket indicar URLs no estilo path, acrescente `S3_FORCE_PATH_STYLE=true`.
 - `SSRF_ALLOW_HOSTS` fica **vazio** em produção. O MCP demo é acessado pelo domínio público, como qualquer servidor externo.
+- Cotas: uma resposta com busca na web custa cerca de 10 créditos (US$ 0,01), e uma só de texto, menos de 1. Com 150 créditos, um visitante demo faz uns 15 pedidos com busca ou centenas sem. O cap global de 3.000 créditos (US$ 3) protege o saldo da conta; ajuste-o ao saldo real e use **/admin** para dar mais cota a um avaliador.
 
-## 4. Google Cloud (mesmo projeto do ambiente local)
+## 3. Google Cloud (mesmo projeto do ambiente local)
 
-Em **Google Auth Platform → Clients → chat-tess-local**, ou num client novo `chat-tess-prod`:
+Em **Google Auth Platform → Clients**, no client já usado localmente ou num client novo:
 
 - Authorized JavaScript origins: `https://<domínio-do-web>`
 - Authorized redirect URIs:
@@ -83,15 +80,16 @@ Em **Google Auth Platform → Clients → chat-tess-local**, ou num client novo 
 
 Em **Público-alvo → Usuários de teste**, adicione os e-mails dos avaliadores. Só eles conseguem conectar Drive e Gmail. O login demo funciona para qualquer pessoa.
 
-## 5. Depois do primeiro deploy
+## 4. Depois do primeiro deploy
 
 1. Abra `https://<web>/api/health`. Deve responder `{"ok":true}`.
 2. Entre com a conta admin, abra **Conectores** e cadastre o MCP demo: URL `https://<mcp-demo>/mcp`, com o token definido.
-3. Conecte Drive e Gmail e rode o cenário do roteiro (`docs/ROTEIRO-VIDEO.md`).
-4. Em **/admin**, confira o cap global e as cotas.
+3. Anexe uma imagem numa conversa: confirma que o bucket está gravando e que o worker consegue ler.
+4. Conecte Drive e Gmail e rode o cenário do roteiro (`docs/ROTEIRO-VIDEO.md`).
+5. Em **/admin**, confira o cap global e as cotas.
 
-## 6. Custos e desativação
+## 5. Custos e desativação
 
-- Railway: três serviços pequenos + Postgres. Defina **usage limit** no projeto.
+- Railway: três serviços pequenos, Postgres e bucket. Defina **usage limit** no workspace.
 - OpenAI: o cap global do app (`CREDITS_GLOBAL_LIMIT_MICRO`) bloqueia antes de chamar o modelo. Configure também o limite de gasto no painel da OpenAI.
-- Ao fim da janela de avaliação, apague o projeto no Railway e o bucket R2, revogue a chave OpenAI e o client OAuth, e remova os test users.
+- Ao fim da janela de avaliação, apague o projeto no Railway, revogue a chave OpenAI e o client OAuth e remova os test users.

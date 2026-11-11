@@ -120,7 +120,7 @@ src/
     credits/      preço, reserva, liquidação
     sources/      fontes e citações
     sharing/      snapshot/live
-    storage/      anexos, disco local ou R2
+    storage/      anexos, disco local ou bucket S3
     security/     SSRF, criptografia, sanitização
     admin/ audit/ cotas e auditoria
   db/             schema Drizzle e migrations

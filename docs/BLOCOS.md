@@ -27,7 +27,7 @@ Objetivo: o modelo usa ferramentas sob uma política comum e cita fontes reais.
 - Tools HTTP cadastradas pelo usuário (secrets no servidor, teste, habilitação por conversa).
 - MCP: cliente Streamable HTTP no worker, discovery paginado, catálogo versionado, bearer token; servidor MCP demonstrativo com dados sintéticos.
 - Google: OAuth incremental separado do login, tokens cifrados, refresh serializado, `reconnect_required`; tools `drive_search`, `drive_read_file`, `gmail_search`, `gmail_read`.
-- Anexos: storage privado (R2 / local em dev), validação de tipo real, imagem e PDF enviados ao modelo.
+- Anexos: storage privado (bucket S3 / local em dev), validação de tipo real, imagem e PDF enviados ao modelo.
 - Fontes: `sources`/`message_sources` e referências na resposta; política contra exfiltração quando há fontes privadas no contexto.
 
 Aceite: cenário integrado (PDF + imagem + Gmail + Drive + web + MCP) responde com referências; URL privada/redirect para metadata bloqueados; OAuth revogado gera reconexão.
@@ -50,7 +50,7 @@ Objetivo: evidências reproduzíveis no ambiente público.
 
 - Testes da §13 que faltarem (concorrência em Postgres real, falhas de worker, MCP mudando schema, injeção em documento, Playwright dos fluxos principais).
 - Polimento de UX e estados de erro.
-- Deploy Railway (web, worker, Postgres) + R2; segredos, redirect URIs, test users Google.
+- Deploy Railway (web, worker, Postgres, bucket); segredos, redirect URIs, test users Google.
 - README, diagrama, `docs/DECISOES.md`, `docs/SPIKE.md` com resultados medidos, roteiro do vídeo, data de desativação.
 
 Aceite: sessão limpa no deploy reproduz o roteiro da §14.
@@ -62,12 +62,12 @@ Aceite: sessão limpa no deploy reproduz o roteiro da §14.
 | 1 | Concluído e commitado. |
 | 2 | Concluído e commitado. OpenAI e Google verificados com serviços reais depois do commit. |
 | 3 | Concluído; aguardando commit junto com o Bloco 4. |
-| 4 | Código, testes, imagem Docker e documentação prontos. Falta o deploy público (contas Railway/R2), o vídeo e o acesso dos avaliadores. |
+| 4 | Código, testes, imagem Docker e documentação prontos. Falta o deploy público no Railway, o vídeo e o acesso dos avaliadores. |
 
 ## Dependências externas (o que só você consegue fazer)
 
 | Quando | Item |
 |---|---|
 | Bloco 1 | `OPENAI_API_KEY`; projeto Google Cloud com OAuth client (redirect `http://localhost:3000/api/auth/google/callback`). |
-| Bloco 2 | APIs Gmail/Drive habilitadas, tela de consentimento em Testing, test users; bucket R2. |
+| Bloco 2 | APIs Gmail/Drive habilitadas, tela de consentimento em Testing, test users. |
 | Bloco 4 | Conta Railway, domínio/redirect público, acesso dos avaliadores. |

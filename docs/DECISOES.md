@@ -36,7 +36,7 @@ Custo aceito: menos código pronto para CSRF/rotação. Mitigação: cookie `htt
 
 **Google: conexão separada do login.** Drive e Gmail são autorizados à parte, com `include_granted_scopes`, PKCE e scopes somente leitura. Tokens são cifrados com AES-256-GCM. O refresh é serializado por `FOR UPDATE` na linha da conexão e preserva o refresh token anterior quando o Google não envia outro. `invalid_grant` marca `reconnect_required`. PDF do Drive sem camada de texto devolve erro orientando enviar como anexo, em vez de fingir leitura.
 
-**Anexos: tipo pelos bytes.** Só PNG, JPEG, GIF, WEBP e PDF, detectados pela assinatura do arquivo. Vão ao modelo como imagem/arquivo nativos, porque PDF escaneado precisa da análise visual e extração de texto não substitui. Em produção, R2 é obrigatório, já que web e worker não compartilham disco.
+**Anexos: tipo pelos bytes.** Só PNG, JPEG, GIF, WEBP e PDF, detectados pela assinatura do arquivo. Vão ao modelo como imagem/arquivo nativos, porque PDF escaneado precisa da análise visual e extração de texto não substitui. Em produção, um bucket S3 privado é obrigatório (Railway Buckets no deploy), já que web e worker não compartilham disco.
 
 **Modelo: `gpt-6-luna` com raciocínio `low`.** É o modelo mais barato disponível na conta (US$ 0,10 / 0,01 / 0,50 por 1M tokens de entrada, cache e saída; página oficial consultada em 10/11/2026) e suporta Responses API, function calling, busca nativa e entrada de imagem. Tokens de raciocínio são cobrados como saída, por isso o esforço fica configurável (`OPENAI_REASONING_EFFORT`). A reserva da busca inclui tarifa (US$ 10 por 1k chamadas) e uma estimativa dos tokens de conteúdo injetados por busca (`WEB_SEARCH_TOKENS_PER_CALL`), que a página informa serem cobrados à taxa do modelo.
 
@@ -75,5 +75,7 @@ Custo aceito: menos código pronto para CSRF/rotação. Mitigação: cookie `htt
 **Custo da busca.** A busca nativa domina o custo (US$ 10 por 1k chamadas, mais tokens de conteúdo). Passou a usar `search_context_size: "low"` e uma chamada por resposta. As cotas de produção em `DEPLOY.md` foram recalculadas para isso.
 
 **"Nova conversa".** A criação fica num ref, e o envio espera por ela, em vez de usar o `activeId` anterior. O servidor reaproveita a conversa vazia mais recente, então cliques repetidos não acumulam conversas vazias.
+
+**Bucket do Railway em vez de R2.** O plano previa Cloudflare R2. O Railway oferece buckets privados compatíveis com S3 no mesmo projeto, então o storage passou a aceitar qualquer endpoint S3 (`S3_ENDPOINT`, `S3_BUCKET`…). O deploy usa o bucket do Railway, e o R2 continua possível só trocando o endpoint. Menos uma conta e um conjunto de credenciais para criar e revogar.
 
 **Ainda não verificado:** refresh real após a expiração do access token e o fluxo `reconnect_required` com revogação feita no Google.

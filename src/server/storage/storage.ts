@@ -29,19 +29,21 @@ class LocalStorage implements Storage {
   }
 }
 
-/** Cloudflare R2 pela API S3. Bucket privado; downloads passam sempre pela aplicação. */
-class R2Storage implements Storage {
+/**
+ * Object storage compatível com S3 (Railway Buckets, Cloudflare R2, MinIO). Bucket privado:
+ * downloads passam sempre pela aplicação, que confere o dono do anexo.
+ */
+class S3Storage implements Storage {
   private s3: S3Client;
   constructor(
     private readonly bucket: string,
-    accountId: string,
-    accessKeyId: string,
-    secretAccessKey: string,
+    opts: { endpoint: string; region: string; accessKeyId: string; secretAccessKey: string; forcePathStyle: boolean },
   ) {
     this.s3 = new S3Client({
-      region: 'auto',
-      endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
-      credentials: { accessKeyId, secretAccessKey },
+      region: opts.region,
+      endpoint: opts.endpoint,
+      forcePathStyle: opts.forcePathStyle,
+      credentials: { accessKeyId: opts.accessKeyId, secretAccessKey: opts.secretAccessKey },
     });
   }
   async put(key: string, body: Buffer, contentType: string) {
@@ -60,11 +62,17 @@ let instance: Storage | undefined;
 
 export function storage(): Storage {
   if (instance) return instance;
-  const { R2_BUCKET, R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY } = process.env;
-  if (R2_BUCKET && R2_ACCOUNT_ID && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY) {
-    instance = new R2Storage(R2_BUCKET, R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY);
+  const { S3_ENDPOINT, S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY } = process.env;
+  if (S3_ENDPOINT && S3_BUCKET && S3_ACCESS_KEY_ID && S3_SECRET_ACCESS_KEY) {
+    instance = new S3Storage(S3_BUCKET, {
+      endpoint: S3_ENDPOINT,
+      region: process.env.S3_REGION || 'auto',
+      accessKeyId: S3_ACCESS_KEY_ID,
+      secretAccessKey: S3_SECRET_ACCESS_KEY,
+      forcePathStyle: process.env.S3_FORCE_PATH_STYLE === 'true',
+    });
   } else if (process.env.NODE_ENV === 'production') {
-    throw new Error('em produção, web e worker não compartilham disco: configure R2');
+    throw new Error('em produção, web e worker não compartilham disco: configure o bucket S3 (S3_ENDPOINT, S3_BUCKET, S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY)');
   } else {
     instance = new LocalStorage(process.env.LOCAL_STORAGE_DIR ?? path.resolve('.data/uploads'));
   }
