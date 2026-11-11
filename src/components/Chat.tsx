@@ -11,6 +11,7 @@ import { SharePanel } from './Share';
 import { credits } from './ui';
 
 type ConvSummary = { id: string; title: string | null };
+type Privacy = { hasPrivateData: boolean; externalAccessAllowed: boolean };
 type Credits = { availableMicro: number; reservedMicro: number; settledMicro: number; limitMicro: number } | null;
 type ToolItem = { key: string; label: string; kind: string; available: boolean; unavailableReason?: string; enabled: boolean };
 type PendingFile = { id: string; filename: string; mimeType: string };
@@ -87,9 +88,11 @@ export function Chat({ user }: { user: { name: string | null; kind: string; role
   const [tools, setTools] = useState<ToolItem[]>([]);
   const [showTools, setShowTools] = useState(false);
   const [showConnectors, setShowConnectors] = useState(false);
+  const [privacy, setPrivacy] = useState<Privacy>({ hasPrivateData: false, externalAccessAllowed: false });
   const [panel, setPanel] = useState<{ kind: 'execution'; runId: string } | { kind: 'memory' } | { kind: 'share' } | null>(null);
   const bottom = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const creating = useRef<Promise<string> | null>(null);
 
   const refreshMe = useCallback(async () => {
     const me = await api<{ credits: Credits }>('/api/me');
@@ -112,6 +115,7 @@ export function Chat({ user }: { user: { name: string | null; kind: string; role
       const snap = await api<ConversationSnapshotDto>(`/api/conversations/${id}`);
       setActiveId(id);
       setMsgs(snap.messages);
+      setPrivacy(snap.conversation);
       setRunEvents([]);
       setRun(snap.activeRun ? { id: snap.activeRun.id, cursor: snap.activeRun.lastEventSeq } : null);
       try {
@@ -151,7 +155,11 @@ export function Chat({ user }: { user: { name: string | null; kind: string; role
       void refreshMe();
       void refreshConvs();
       // Recarrega para trazer fontes vinculadas na finalização.
-      if (activeId) void api<ConversationSnapshotDto>(`/api/conversations/${activeId}`).then((s) => setMsgs(s.messages));
+      if (activeId)
+        void api<ConversationSnapshotDto>(`/api/conversations/${activeId}`).then((s) => {
+          setMsgs(s.messages);
+          setPrivacy(s.conversation);
+        });
     });
     return () => es.close();
   }, [run, activeId, refreshMe, refreshConvs]);
@@ -161,18 +169,56 @@ export function Chat({ user }: { user: { name: string | null; kind: string; role
     bottom.current?.scrollIntoView({ block: 'end' });
   }, [msgs]);
 
+  /**
+   * A criação fica num ref, não no estado: um envio feito antes de o React re-renderizar
+   * espera a conversa nova em vez de usar o activeId anterior.
+   */
+  function startConversation() {
+    const pending = api<{ conversation: ConvSummary }>('/api/conversations', { method: 'POST' }).then(async (r) => {
+      await refreshConvs();
+      await loadConversation(r.conversation.id);
+      return r.conversation.id;
+    });
+    creating.current = pending;
+    void pending.finally(() => {
+      if (creating.current === pending) creating.current = null;
+    });
+    return pending;
+  }
+
   async function ensureConversation() {
+    if (creating.current) return creating.current;
     if (activeId) return activeId;
-    const r = await api<{ conversation: ConvSummary }>('/api/conversations', { method: 'POST' });
-    await refreshConvs();
-    await loadConversation(r.conversation.id);
-    return r.conversation.id;
+    return startConversation();
   }
 
   async function newConversation() {
-    const r = await api<{ conversation: ConvSummary }>('/api/conversations', { method: 'POST' });
-    await refreshConvs();
-    await loadConversation(r.conversation.id);
+    if (run || creating.current) return;
+    setActiveId(null);
+    setMsgs([]);
+    setTools([]);
+    setRunEvents([]);
+    setPanel(null);
+    setPrivacy({ hasPrivateData: false, externalAccessAllowed: false });
+    await startConversation().catch((e) => setError((e as Error).message));
+  }
+
+  async function setExternalAccess(allowed: boolean) {
+    if (!activeId) return;
+    if (
+      allowed &&
+      !window.confirm(
+        'Liberar acesso externo nesta conversa?\n\nA busca na web e a leitura de páginas novas voltam a funcionar. ' +
+          'O modelo poderá incluir trechos dos seus anexos, documentos ou e-mails nas buscas e nos endereços que acessar.',
+      )
+    )
+      return;
+    try {
+      await api(`/api/conversations/${activeId}/external-access`, { method: 'PUT', body: JSON.stringify({ allowed }) });
+      setPrivacy((p) => ({ ...p, externalAccessAllowed: allowed }));
+    } catch (e) {
+      setError((e as Error).message);
+    }
   }
 
   async function upload(list: FileList | null) {
@@ -335,6 +381,22 @@ export function Chat({ user }: { user: { name: string | null; kind: string; role
 
         <div className="border-t border-[var(--border)] bg-[var(--panel)]">
           <div className="mx-auto max-w-3xl space-y-2 px-4 py-3">
+            {privacy.hasPrivateData &&
+              (privacy.externalAccessAllowed ? (
+                <p className="text-xs text-[var(--muted)]">
+                  Acesso externo liberado nesta conversa.{' '}
+                  <button onClick={() => setExternalAccess(false)} className="underline">Bloquear de novo</button>
+                </p>
+              ) : (
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-[var(--border)] px-3 py-2 text-xs">
+                  <span className="min-w-0 flex-1">
+                    Esta conversa tem dados privados (anexos, Drive ou Gmail). Busca na web e páginas novas ficam bloqueadas para evitar vazamento.
+                  </span>
+                  <button onClick={() => setExternalAccess(true)} className="rounded border border-[var(--border)] px-2 py-1">
+                    Liberar acesso externo
+                  </button>
+                </div>
+              ))}
             {files.length > 0 && (
               <div className="flex flex-wrap gap-1">
                 {files.map((f) => (

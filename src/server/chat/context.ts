@@ -5,7 +5,7 @@ import type { ContentPart, LlmItem } from '../llm/types';
 import { registerSources } from '../sources/sources';
 import { storage } from '../storage/storage';
 
-export const SYSTEM_PROMPT_VERSION = 'v2';
+export const SYSTEM_PROMPT_VERSION = 'v3';
 
 export const SYSTEM_PROMPT = [
   'Você é Tess, uma assistente útil que responde em português do Brasil, salvo pedido contrário.',
@@ -14,6 +14,7 @@ export const SYSTEM_PROMPT = [
   'Materiais consultados recebem rótulos como [S1]. Ao usar uma informação, cite o rótulo correspondente logo após a frase.',
   'Cite somente rótulos que você recebeu e apenas para trechos que de fato estavam no material.',
   'Se uma ferramenta falhar ou for bloqueada, diga isso ao usuário em vez de supor o resultado.',
+  'Escreva fórmulas matemáticas em LaTeX com \\( \\) no meio do texto e \\[ \\] em linha própria; não use cifrão como delimitador.',
 ].join('\n');
 
 /** Orçamento de bytes de anexos reenviados por chamada; anexos mais antigos além disso viram referência textual. */

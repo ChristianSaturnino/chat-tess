@@ -35,3 +35,4 @@ body {
 .markdown table { border-collapse: collapse; display: block; overflow-x: auto; }
 .markdown th, .markdown td { border: 1px solid var(--border); padding: 0.25em 0.5em; }
 .markdown blockquote { border-left: 3px solid var(--border); padding-left: 0.75em; color: var(--muted); }
+.markdown .katex-display { overflow-x: auto; overflow-y: hidden; padding: 0.25em 0; }

@@ -29,6 +29,13 @@
       "when": 1794338551868,
       "tag": "0003_memory_and_shares",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1794405009987,
+      "tag": "0004_external_access",
+      "breakpoints": true
     }
   ]
 }

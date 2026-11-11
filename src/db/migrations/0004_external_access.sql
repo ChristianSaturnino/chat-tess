@@ -1,0 +1,1 @@
+ALTER TABLE "conversations" ADD COLUMN "external_access_allowed_at" timestamp with time zone;

@@ -21,7 +21,8 @@ export class OpenAiAdapter implements LlmAdapter {
 
   async *stream(req: LlmRequest): AsyncIterable<LlmStreamEvent> {
     const tools: Tool[] = req.tools.map((t) => ({ type: 'function', name: t.name, description: t.description, parameters: t.parameters, strict: false }));
-    if (req.webSearch) tools.push({ type: 'web_search' });
+    // Contexto de busca "low": menos tokens de conteúdo cobrados por chamada, suficiente para citar.
+    if (req.webSearch) tools.push({ type: 'web_search', search_context_size: 'low' });
 
     let stream;
     try {

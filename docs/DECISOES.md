@@ -66,4 +66,14 @@ Custo aceito: menos código pronto para CSRF/rotação. Mitigação: cookie `htt
 
 **Verificado com Google real (10/11/2026), conta de teste dedicada:** login com papel admin via `ADMIN_EMAILS`; conexões Drive e Gmail separadas (autorização incremental, refresh token cifrado); cenário integrado lendo um Google Docs e um e-mail, consultando o catálogo MCP e calculando o orçamento, com as três fontes citadas e o total correto; bloqueio da tentativa de exfiltração; tela de cotas do admin.
 
-**Ainda não verificado:** entrada de PDF no modelo escolhido (a página do modelo não lista explicitamente), refresh real após a expiração do access token e o fluxo `reconnect_required` com revogação feita no Google.
+## Ajustes após teste manual (11/11/2026)
+
+**Bloqueio visível e liberação explícita.** Quem anexa um PDF e pede "pesquise sobre isso" via o bloqueio como falha. Agora a conversa com dado privado mostra um aviso acima do campo de mensagem, com o botão **Liberar acesso externo**. A liberação vale só para aquela conversa (`conversations.external_access_allowed_at`), passa por confirmação, é auditada (`conversation.external_access.allow`/`revoke`) e pode ser desfeita. O compartilhamento live continua bloqueado com dado privado, mesmo liberado: liberar a saída para o modelo não torna a conversa pública.
+
+**Fórmulas.** O Markdown usa `remark-math` + `rehype-katex` (KaTeX sem `trust`, sem `\href`). Os delimitadores `\( \)` e `\[ \]` que o modelo usa são convertidos antes do parse. Cifrão simples não abre fórmula, para que "R$ 10 e R$ 20" continue texto. O prompt de sistema (v3) pede esses delimitadores.
+
+**Custo da busca.** A busca nativa domina o custo (US$ 10 por 1k chamadas, mais tokens de conteúdo). Passou a usar `search_context_size: "low"` e uma chamada por resposta. As cotas de produção em `DEPLOY.md` foram recalculadas para isso.
+
+**"Nova conversa".** A criação fica num ref, e o envio espera por ela, em vez de usar o `activeId` anterior. O servidor reaproveita a conversa vazia mais recente, então cliques repetidos não acumulam conversas vazias.
+
+**Ainda não verificado:** refresh real após a expiração do access token e o fluxo `reconnect_required` com revogação feita no Google.

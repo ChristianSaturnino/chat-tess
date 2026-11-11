@@ -20,7 +20,7 @@ import { getLlm } from '../llm';
 import { LlmError, type Citation, type FunctionCall, type LlmItem, type LlmStreamEvent, type LlmToolDef } from '../llm/types';
 import { logger } from '../logger';
 import { appendEvent } from '../runs/events';
-import { conversationHasPrivateData, linkMessageSources, registerSources } from '../sources/sources';
+import { egressRestricted, linkMessageSources, registerSources } from '../sources/sources';
 import { evaluateEgress } from '../tools/policy';
 import { resolveToolset } from '../tools/registry';
 import { ToolError, type ToolFunction, type ToolProvider, type ToolResult } from '../tools/types';
@@ -359,8 +359,8 @@ async function llmStep(
   const prior = runItems(steps);
   const base = joinText(prior.baseText);
   // A busca nativa roda no provider, fora da política local: pode abrir URLs e enviar consultas
-  // escolhidas pelo modelo. Com dado privado na conversa, ela deixa de ser oferecida.
-  const privateContext = requestedWebSearch ? await conversationHasPrivateData(db(), claim.conversationId) : false;
+  // escolhidas pelo modelo. Com dado privado na conversa, ela só é oferecida se o dono liberou.
+  const privateContext = requestedWebSearch ? await egressRestricted(db(), claim.conversationId) : false;
   const webSearch = privateContext ? null : requestedWebSearch;
 
   for (;;) {
@@ -401,7 +401,7 @@ async function llmStep(
         if (privateContext && attemptNo === 1) {
           await appendEvent(tx, claim.runId, 'policy_restricted', {
             tool: 'web_search',
-            message: 'busca na web desativada nesta etapa: a conversa contém dados privados (anexos, Drive ou Gmail)',
+            message: 'busca na web desativada: a conversa contém dados privados (anexos, Drive ou Gmail) e o acesso externo não foi liberado',
           });
         }
         await appendEvent(tx, claim.runId, 'attempt_started', {

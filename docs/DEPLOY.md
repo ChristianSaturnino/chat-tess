@@ -47,13 +47,13 @@ OPENAI_MODEL=gpt-6-luna
 OPENAI_PRICING_JSON={"version":"gpt-6-luna-2026-11-10","input":100000,"cachedInput":10000,"output":500000}
 OPENAI_REASONING_EFFORT=low
 OPENAI_WEB_SEARCH_FEE_MICRO=10000
-WEB_SEARCH_MAX_CALLS=2
+WEB_SEARCH_MAX_CALLS=1
 GOOGLE_CLIENT_ID=...
 GOOGLE_CLIENT_SECRET=...
 ADMIN_EMAILS=<e-mail admin>
-CREDITS_GLOBAL_LIMIT_MICRO=2000000
-CREDITS_USER_LIMIT_MICRO=300000
-CREDITS_DEMO_LIMIT_MICRO=50000
+CREDITS_GLOBAL_LIMIT_MICRO=3000000
+CREDITS_USER_LIMIT_MICRO=500000
+CREDITS_DEMO_LIMIT_MICRO=150000
 DEMO_MAX_SESSIONS_PER_HOUR=20
 R2_BUCKET=chat-tess-uploads
 R2_ACCOUNT_ID=...
@@ -69,6 +69,7 @@ MCP_DEMO_TOKEN=<segredo aleatório>
 ```
 
 - `APP_ENCRYPTION_KEY` de produção deve ser diferente da local. Trocá-la depois invalida tokens e secrets já gravados.
+- Cotas: uma resposta com busca na web custa cerca de 10 créditos (US$ 0,01), e uma só de texto, menos de 1. Com 150 créditos, um visitante demo faz uns 15 pedidos com busca ou centenas sem. O cap global de 3.000 créditos (US$ 3) protege o saldo da conta; ajuste-o ao saldo real e use **/admin** para dar mais cota a um avaliador.
 - `SSRF_ALLOW_HOSTS` fica **vazio** em produção. O MCP demo é acessado pelo domínio público, como qualquer servidor externo.
 
 ## 4. Google Cloud (mesmo projeto do ambiente local)

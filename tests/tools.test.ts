@@ -3,12 +3,12 @@ import type { ChildProcess } from 'node:child_process';
 import { asc, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { closeDb, db } from '@/db/client';
-import { mcpServers, messageSources, messages, runEvents, runs, sources, toolCalls } from '@/db/schema';
+import { auditEvents, mcpServers, messageSources, messages, runEvents, runs, sources, toolCalls } from '@/db/schema';
 import { executeRun } from '@/server/chat/engine';
 import { setLlmOverride } from '@/server/llm';
 import { FakeAdapter } from '@/server/llm/fake';
 import type { LlmRequest } from '@/server/llm/types';
-import { createConversation, startTurn } from '@/server/runs/commands';
+import { createConversation, setExternalAccess, startTurn } from '@/server/runs/commands';
 import { stopBoss } from '@/server/runs/queue';
 import { uploadAttachment } from '@/server/storage/attachments';
 import { createHttpTool } from '@/server/tools/http-tools';
@@ -209,6 +209,30 @@ describe('busca nativa e dado privado', () => {
     const { seen, runId } = await runCapturingWebSearch([att.id], actor, conv.id);
     expect(seen[0]).toBeNull();
     expect(await types(runId)).toContain('policy_restricted');
+  });
+
+  it('liberação explícita do dono reabre a busca e fica auditada; revogar volta a bloquear', async () => {
+    const { actor, conv } = await setup();
+    const att = await uploadAttachment(actor.userId, 'contrato.png', TINY_PNG);
+    await setExternalAccess(actor, conv.id, true);
+    const allowed = await runCapturingWebSearch([att.id], actor, conv.id);
+    expect(allowed.seen[0]).toEqual({ maxCalls: 2 });
+    expect(await types(allowed.runId)).not.toContain('policy_restricted');
+
+    await setExternalAccess(actor, conv.id, false);
+    const revoked = await runCapturingWebSearch([], actor, conv.id);
+    expect(revoked.seen[0]).toBeNull();
+
+    const actions = await db().select({ action: auditEvents.action }).from(auditEvents).where(eq(auditEvents.entityId, conv.id));
+    expect(actions.map((a) => a.action)).toEqual(
+      expect.arrayContaining(['conversation.external_access.allow', 'conversation.external_access.revoke']),
+    );
+  });
+
+  it('outro usuário não consegue liberar o acesso externo da conversa', async () => {
+    const { conv } = await setup();
+    const intruder = await createTestUser();
+    await expect(setExternalAccess({ userId: intruder.id }, conv.id, true)).rejects.toThrow();
   });
 });
 

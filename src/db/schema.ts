@@ -51,6 +51,7 @@ export const conversations = pgTable(
     userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
     title: text('title'),
     nextSeq: integer('next_seq').notNull().default(1),
+    externalAccessAllowedAt: timestamp('external_access_allowed_at', { withTimezone: true }),
     createdAt: createdAt(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

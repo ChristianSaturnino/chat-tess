@@ -3,11 +3,13 @@ import { expect, test, type Page } from '@playwright/test';
 async function startDemo(page: Page) {
   await page.goto('/');
   await page.getByRole('button', { name: 'Experimentar demo' }).click();
-  await expect(page.getByPlaceholder('Mensagem…')).toBeVisible();
+  // O saldo só aparece depois que o React hidratou e carregou /api/me: antes disso, o texto digitado se perde.
+  await expect(page.getByText(/créditos disponíveis/)).toBeVisible();
 }
 
 async function send(page: Page, text: string) {
   await page.getByPlaceholder('Mensagem…').fill(text);
+  await expect(page.getByRole('button', { name: 'Enviar' })).toBeEnabled();
   await page.getByRole('button', { name: 'Enviar' }).click();
 }
 
@@ -45,8 +47,10 @@ test('servidor MCP cadastrado pela interface é usado e citado como fonte', asyn
 
   await page.getByRole('button', { name: /Ferramentas \(/ }).click();
   // Checkbox controlado: o estado só muda depois que a API confirma.
-  await page.getByRole('checkbox').last().click();
-  await expect(page.getByRole('checkbox').last()).toBeChecked();
+  // A lista recarrega ao fechar os conectores; o item do MCP só existe depois disso.
+  const mcpTool = page.getByRole('checkbox', { name: 'demo mcp' });
+  await mcpTool.click();
+  await expect(mcpTool).toBeChecked();
   await send(page, 'monitores? [[tool:mcp_demo_catalog_search {"category":"monitor"}]]');
   await expect(page.getByText('Fontes citadas')).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText('mcp demo · catalog_search').first()).toBeVisible();

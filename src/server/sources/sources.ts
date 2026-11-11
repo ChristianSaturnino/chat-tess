@@ -1,5 +1,5 @@
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
-import { attachments, messageSources, messages, PRIVATE_SOURCE_KINDS, runs, sources } from '@/db/schema';
+import { attachments, conversations, messageSources, messages, PRIVATE_SOURCE_KINDS, runs, sources } from '@/db/schema';
 import type { Db } from '@/db/client';
 import type { SourceInput } from '../tools/types';
 
@@ -66,6 +66,19 @@ export async function conversationHasPrivateData(d: Db, conversationId: string):
     .where(eq(messages.conversationId, conversationId))
     .limit(1);
   return !!att;
+}
+
+/**
+ * Saída para destinos novos restrita: há dado privado na conversa e o dono não liberou o acesso
+ * externo. A liberação é explícita, por conversa, e auditada.
+ */
+export async function egressRestricted(d: Db, conversationId: string): Promise<boolean> {
+  const [conv] = await d
+    .select({ allowedAt: conversations.externalAccessAllowedAt })
+    .from(conversations)
+    .where(eq(conversations.id, conversationId));
+  if (conv?.allowedAt) return false;
+  return conversationHasPrivateData(d, conversationId);
 }
 
 /** URLs já obtidas como fonte web nesta conversa: destinos considerados revisados pela política. */

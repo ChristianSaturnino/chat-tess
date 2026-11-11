@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { asc, eq, sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { closeDb, db } from '@/db/client';
-import { creditReservations, messages, runEvents, runs, stepAttempts, usageLedger, runSteps } from '@/db/schema';
+import { conversations, creditReservations, messages, runEvents, runs, stepAttempts, usageLedger, runSteps } from '@/db/schema';
 import { executeRun } from '@/server/chat/engine';
 import { balance } from '@/server/credits/credits';
 import { setLlmOverride } from '@/server/llm';
@@ -31,6 +31,28 @@ const eventTypes = async (runId: string) =>
   (await db().select({ t: runEvents.type }).from(runEvents).where(eq(runEvents.runId, runId)).orderBy(asc(runEvents.seq))).map((r) => r.t);
 
 describe('comando de turno', () => {
+  it('"Nova conversa" reaproveita a conversa vazia em vez de acumular rascunhos', async () => {
+    const { actor, conv } = await setup();
+    const again = await createConversation(actor);
+    expect(again.id).toBe(conv.id);
+    await startTurn(actor, { conversationId: conv.id, text: 'olá', idempotencyKey: randomUUID() });
+    const fresh = await createConversation(actor);
+    expect(fresh.id).not.toBe(conv.id);
+  });
+
+  it('criações simultâneas sem conversa vazia geram uma única conversa', async () => {
+    // Conexões já abertas, para que as transações de fato se sobreponham.
+    await Promise.all(Array.from({ length: 8 }, () => db().execute(sql`select pg_sleep(0.05)`)));
+    for (let round = 0; round < 5; round++) {
+      const user = await createTestUser();
+      const actor = { userId: user.id };
+      const created = await Promise.all(Array.from({ length: 8 }, () => createConversation(actor)));
+      expect(new Set(created.map((c) => c.id)).size).toBe(1);
+      const rows = await db().select({ id: conversations.id }).from(conversations).where(eq(conversations.userId, user.id));
+      expect(rows).toHaveLength(1);
+    }
+  });
+
   it('POST repetido com a mesma chave devolve o mesmo run', async () => {
     const { actor, conv } = await setup();
     const key = randomUUID();

@@ -87,7 +87,7 @@ export type MessageDto = {
 };
 
 export type ConversationSnapshotDto = {
-  conversation: { id: string; title: string | null };
+  conversation: { id: string; title: string | null; hasPrivateData: boolean; externalAccessAllowed: boolean };
   messages: MessageDto[];
   activeRun: { id: string; status: string; lastEventSeq: number } | null;
 };

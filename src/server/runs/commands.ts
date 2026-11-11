@@ -7,7 +7,7 @@ import { audit } from '../audit/audit';
 import { config } from '../config';
 import { AppError, notFound } from '../errors';
 import { SYSTEM_PROMPT_VERSION } from '../chat/context';
-import { messageSourcesFor } from '../sources/sources';
+import { conversationHasPrivateData, messageSourcesFor } from '../sources/sources';
 import { runSummaries } from './timeline';
 import { attachToMessage } from '../storage/attachments';
 import { snapshotTools } from '../tools/registry';
@@ -32,11 +32,45 @@ async function isDemoUser(d: Db, userId: string) {
   return u?.kind === 'demo';
 }
 
+/**
+ * Reaproveita a conversa vazia mais recente do usuário, para "Nova conversa" não acumular rascunhos.
+ * Sem conversa vazia não há linha para travar, então criações simultâneas do mesmo usuário são
+ * serializadas por um advisory lock da transação.
+ */
 export async function createConversation(actor: Actor) {
   return withTx(async ({ db: tx }) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`conversation.create:${actor.userId}`}, 0))`);
+    const [empty] = await tx
+      .select()
+      .from(conversations)
+      .where(and(eq(conversations.userId, actor.userId), eq(conversations.nextSeq, 1)))
+      .orderBy(desc(conversations.updatedAt))
+      .limit(1);
+    if (empty) {
+      const [touched] = await tx.update(conversations).set({ updatedAt: new Date() }).where(eq(conversations.id, empty.id)).returning();
+      return touched!;
+    }
     const [conv] = await tx.insert(conversations).values({ userId: actor.userId }).returning();
     await audit(tx, { actorUserId: actor.userId, action: 'conversation.create', entityType: 'conversation', entityId: conv!.id });
     return conv!;
+  });
+}
+
+/** Liberação explícita do dono para acesso a destinos novos mesmo com dado privado na conversa. */
+export async function setExternalAccess(actor: Actor, conversationId: string, allowed: boolean) {
+  return withTx(async ({ db: tx }) => {
+    const conv = await ownedConversation(tx, actor, conversationId, true);
+    if ((conv.externalAccessAllowedAt !== null) === allowed) return;
+    await tx
+      .update(conversations)
+      .set({ externalAccessAllowedAt: allowed ? new Date() : null })
+      .where(eq(conversations.id, conv.id));
+    await audit(tx, {
+      actorUserId: actor.userId,
+      action: allowed ? 'conversation.external_access.allow' : 'conversation.external_access.revoke',
+      entityType: 'conversation',
+      entityId: conv.id,
+    });
   });
 }
 
@@ -210,7 +244,12 @@ export async function getConversationSnapshot(actor: Actor, conversationId: stri
         .from(runs)
         .where(and(eq(runs.conversationId, conv.id), inArray(runs.status, ACTIVE_RUN_STATUS)));
       return {
-        conversation: { id: conv.id, title: conv.title },
+        conversation: {
+          id: conv.id,
+          title: conv.title,
+          hasPrivateData: await conversationHasPrivateData(tx, conv.id),
+          externalAccessAllowed: conv.externalAccessAllowedAt !== null,
+        },
         messages: msgs.map(
           (m): MessageDto => ({
             id: m.id,

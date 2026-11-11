@@ -38,7 +38,7 @@ Garantias e seus limites:
 - **Recuperação.** O worker trabalha com lease, heartbeat e fencing por versão. Etapas confirmadas são reaproveitadas, e uma tentativa interrompida fica como `unknown`, sem texto concatenado.
 - **Efeitos externos não têm "exatamente uma vez".** Leituras podem ser repetidas; ações com efeito externo nunca são repetidas automaticamente.
 - **Créditos em micro-USD inteiros.** As reservas de usuário e global são feitas com ordem fixa de locks, e o consumo sem `usage` fica `unknown` com a reserva mantida.
-- **Política contra exfiltração.** Com dado privado no contexto, um destino novo é bloqueado e a busca nativa é retirada da chamada. A regra é aplicada pelo sistema, não pedida ao modelo.
+- **Política contra exfiltração.** Com dado privado no contexto, um destino novo é bloqueado e a busca nativa é retirada da chamada. A regra é aplicada pelo sistema, não pedida ao modelo. Um aviso acima do campo de mensagem explica o bloqueio, e o dono pode liberar o acesso externo naquela conversa com um clique: a liberação é explícita, revogável e auditada.
 
 ## Rodar localmente
 

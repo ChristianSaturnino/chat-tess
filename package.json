@@ -32,6 +32,7 @@
     "drizzle-orm": "^0.45.4",
     "google-auth-library": "^11.3.4",
     "ipaddr.js": "^2.5.0",
+    "katex": "^0.19.1",
     "linkedom": "^0.18.15",
     "next": "^16.4.6",
     "openai": "^7.55.0",
@@ -41,7 +42,9 @@
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-markdown": "^10.1.0",
+    "rehype-katex": "^7.0.1",
     "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0",
     "tsx": "^4.23.15",
     "turndown": "^7.2.5",
     "undici": "^8.12.4",
@@ -60,5 +63,8 @@
     "tailwindcss": "^4.3.5",
     "typescript": "^5.9.3",
     "vitest": "^5.1.0"
+  },
+  "overrides": {
+    "katex": "$katex"
   }
 }
