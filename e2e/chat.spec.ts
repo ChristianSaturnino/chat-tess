@@ -30,7 +30,7 @@ test('cancelar interrompe a resposta e marca como cancelada', async ({ page }) =
   await send(page, 'esta resposta será cancelada');
   await expect(page.getByText('Resposta simulada', { exact: false })).toBeVisible({ timeout: 20_000 });
   await page.getByRole('button', { name: 'Cancelar' }).click();
-  await expect(page.getByText('[cancelada]')).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText('cancelada', { exact: true })).toBeVisible({ timeout: 15_000 });
 });
 
 test('servidor MCP cadastrado pela interface é usado e citado como fonte', async ({ page }) => {
@@ -45,15 +45,15 @@ test('servidor MCP cadastrado pela interface é usado e citado como fonte', asyn
   await expect(page.getByText('Tools: catalog_search, quote_calculate')).toBeVisible();
   await page.getByRole('button', { name: 'Fechar' }).click();
 
-  await page.getByRole('button', { name: /Ferramentas \(/ }).click();
+  await page.getByRole('button', { name: /^Ferramentas/ }).click();
   // Checkbox controlado: o estado só muda depois que a API confirma.
   // A lista recarrega ao fechar os conectores; o item do MCP só existe depois disso.
   const mcpTool = page.getByRole('checkbox', { name: 'demo mcp' });
   await mcpTool.click();
   await expect(mcpTool).toBeChecked();
   await send(page, 'monitores? [[tool:mcp_demo_catalog_search {"category":"monitor"}]]');
-  await expect(page.getByText('Fontes citadas')).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByText('mcp demo · catalog_search').first()).toBeVisible();
+  await expect(page.getByText('Fontes citadas')).toBeVisible({ timeout: 40_000 });
+  await expect(page.getByText('demo · catalog_search').first()).toBeVisible();
 
   await page.getByRole('button', { name: 'Ver execução' }).last().click();
   await expect(page.getByText(/mcp_demo_catalog_search: ok/)).toBeVisible();

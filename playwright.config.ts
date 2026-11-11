@@ -9,7 +9,7 @@ const env = {
   APP_URL: `http://localhost:${PORT}`,
   LLM_PROVIDER: 'fake',
   // Lento o bastante para recarregar e cancelar no meio do streaming.
-  FAKE_LLM_DELAY_MS: '200',
+  FAKE_LLM_DELAY_MS: '400',
   APP_ENCRYPTION_KEY: Buffer.alloc(32, 9).toString('base64'),
   SSRF_ALLOW_HOSTS: `localhost:${MCP_PORT}`,
   DEMO_MAX_SESSIONS_PER_HOUR: '1000',
