@@ -3,13 +3,31 @@ import type { LookupAddress } from 'node:dns';
 import ipaddr from 'ipaddr.js';
 import { Agent, fetch as undiciFetch, type Response as UndiciResponse } from 'undici';
 
+const REASONS: Record<string, string> = {
+  url_invalida: 'URL inválida',
+  esquema: 'só http e https são permitidos',
+  credenciais_na_url: 'a URL não pode conter usuário ou senha',
+  porta: 'só as portas 80 e 443 são permitidas',
+  ip_nao_publico: 'o IP não é público (rede privada, loopback ou metadata de nuvem)',
+  host_interno: 'o host é interno (localhost, .local ou .internal)',
+  dns_ip_nao_publico: 'o domínio resolve para um IP não público',
+};
+
 export class SsrfBlockedError extends Error {
   constructor(
     readonly reason: string,
     readonly target: string,
   ) {
-    super(`destino bloqueado (${reason}): ${target}`);
+    super(`destino bloqueado: ${REASONS[reason] ?? reason} (${target})`);
   }
+}
+
+/** O bloqueio no lookup chega embrulhado pelo fetch (TypeError → cause); procura na cadeia. */
+export function findSsrfError(err: unknown): SsrfBlockedError | null {
+  for (let e = err, depth = 0; e && depth < 5; e = (e as { cause?: unknown }).cause, depth++) {
+    if (e instanceof SsrfBlockedError) return e;
+  }
+  return null;
 }
 
 export class FetchLimitError extends Error {}

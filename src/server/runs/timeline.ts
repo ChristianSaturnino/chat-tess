@@ -1,5 +1,5 @@
 import { and, asc, eq, inArray, ne, sql } from 'drizzle-orm';
-import { contextSummaries, conversations, runEvents, runSteps, runs, stepAttempts, toolCalls, usageLedger } from '@/db/schema';
+import { contextSummaries, conversations, mcpServers, runEvents, runSteps, runs, stepAttempts, toolCalls, tools, usageLedger } from '@/db/schema';
 import { db, type Db } from '@/db/client';
 import type { RunEventDto, RunEventType } from '@/shared/events';
 import { notFound } from '../errors';
@@ -15,6 +15,26 @@ export type RunSummaryDto = {
   toolCalls: number;
   compactions: number;
 };
+
+const BUILTIN_LABELS: Record<string, string> = {
+  'builtin:web_search': 'Busca na web',
+  'builtin:scrape_page': 'Ler página web',
+  'google:drive': 'Google Drive',
+  'google:gmail': 'Gmail',
+};
+
+/** Nomes legíveis das ferramentas congeladas no run; tools e servidores removidos mantêm o nome. */
+async function toolLabels(keys: string[]): Promise<string[]> {
+  const ids = (prefix: string) => keys.filter((k) => k.startsWith(prefix)).map((k) => k.slice(prefix.length));
+  const [httpIds, mcpIds] = [ids('http:'), ids('mcp:')];
+  const httpRows = httpIds.length ? await db().select({ id: tools.id, name: tools.name }).from(tools).where(inArray(tools.id, httpIds)) : [];
+  const mcpRows = mcpIds.length ? await db().select({ id: mcpServers.id, name: mcpServers.name }).from(mcpServers).where(inArray(mcpServers.id, mcpIds)) : [];
+  const names = new Map<string, string>([
+    ...httpRows.map((r) => [`http:${r.id}`, `${r.name} (HTTP)`] as const),
+    ...mcpRows.map((r) => [`mcp:${r.id}`, `${r.name} (MCP)`] as const),
+  ]);
+  return keys.map((k) => BUILTIN_LABELS[k] ?? names.get(k) ?? k);
+}
 
 /** Agregados por run para o rodapé de cada resposta. */
 export async function runSummaries(d: Db, runIds: string[]): Promise<Map<string, RunSummaryDto>> {
@@ -92,7 +112,7 @@ export async function getRunTimeline(userId: string, runId: string) {
       id: run.id,
       traceId: run.traceId,
       model: run.config.model,
-      tools: (run.config.tools ?? []).map((t) => t.key),
+      tools: await toolLabels((run.config.tools ?? []).map((t) => t.key)),
       error: run.error,
       ...summary,
     },

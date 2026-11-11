@@ -10,7 +10,7 @@ import { AppError, notFound } from '../errors';
 import { logger } from '../logger';
 import { decrypt, encrypt } from '../security/crypto';
 import { truncate } from '../security/sanitize';
-import { assertUrlAllowed, guardedFetchLike } from '../security/ssrf';
+import { assertUrlAllowed, findSsrfError, guardedFetchLike } from '../security/ssrf';
 import { validateArgs } from './schema';
 import { toFunctionName, ToolError, type ToolProvider } from './types';
 
@@ -86,7 +86,7 @@ export async function syncMcpServer(userId: string, serverId: string) {
       return row!;
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    const message = findSsrfError(err)?.message ?? (err instanceof Error ? err.message : String(err));
     await db().update(mcpServers).set({ status: 'error', lastError: message.slice(0, 500) }).where(eq(mcpServers.id, serverId));
     throw new AppError(502, 'mcp_sync_failed', `não foi possível listar as tools: ${message}`);
   }

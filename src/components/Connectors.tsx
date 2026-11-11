@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from './api';
 import { IconX } from './icons';
 import { Badge, btn, btnGhost, btnPrimary, card as box, input, label } from './ui';
@@ -8,13 +8,33 @@ import { Badge, btn, btnGhost, btnPrimary, card as box, input, label } from './u
 type Connection = { id: string; service: 'drive' | 'gmail'; status: string; externalEmail: string | null; lastError: string | null };
 type HttpTool = { id: string; name: string; description: string; method: string; url: string; sideEffect: boolean; hasSecrets: boolean };
 type McpServer = { id: string; name: string; url: string; status: string; lastError: string | null; tools: { name: string; description: string }[]; hasToken: boolean };
+type Notice = { scope: string; tone: 'ok' | 'error'; text: string } | null;
+
+/** Resultado de uma ação, exibido junto dela e trazido para a área visível do diálogo. */
+function NoticeLine({ notice, scope }: { notice: Notice; scope: string }) {
+  const ref = useRef<HTMLParagraphElement>(null);
+  const visible = notice?.scope === scope;
+  useEffect(() => {
+    if (visible) ref.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [visible, notice]);
+  if (!visible) return null;
+  return (
+    <p
+      ref={ref}
+      role={notice.tone === 'error' ? 'alert' : 'status'}
+      className={`rounded-lg px-3 py-2 text-sm ${notice.tone === 'error' ? 'bg-danger-soft text-danger' : 'bg-accent-soft text-accent-ink'}`}
+    >
+      {notice.text}
+    </p>
+  );
+}
 
 export function Connectors({ onClose }: { onClose: () => void }) {
   const [conns, setConns] = useState<Connection[]>([]);
   const [googleConfigured, setGoogleConfigured] = useState(false);
   const [tools, setTools] = useState<HttpTool[]>([]);
   const [servers, setServers] = useState<McpServer[]>([]);
-  const [msg, setMsg] = useState<string | null>(null);
+  const [notice, setNotice] = useState<Notice>(null);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -30,23 +50,23 @@ export function Connectors({ onClose }: { onClose: () => void }) {
   }, []);
 
   useEffect(() => {
-    load().catch((e) => setMsg(e.message));
+    load().catch((e) => setNotice({ scope: 'top', tone: 'error', text: e.message }));
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
     const err = new URLSearchParams(window.location.search).get('connect_error');
-    if (err) setMsg(`Conexão Google: ${err}`);
+    if (err) setNotice({ scope: 'google', tone: 'error', text: `Conexão Google: ${err}` });
     return () => window.removeEventListener('keydown', onKey);
   }, [load, onClose]);
 
-  const act = async (fn: () => Promise<unknown>, ok?: string) => {
+  const act: Act = async (scope, fn, ok) => {
     setBusy(true);
-    setMsg(null);
+    setNotice(null);
     try {
       await fn();
-      if (ok) setMsg(ok);
+      if (ok) setNotice({ scope, tone: 'ok', text: ok });
       await load();
     } catch (e) {
-      setMsg((e as Error).message);
+      setNotice({ scope, tone: 'error', text: (e as Error).message });
     } finally {
       setBusy(false);
     }
@@ -65,7 +85,7 @@ export function Connectors({ onClose }: { onClose: () => void }) {
           </button>
         </div>
         <div className="space-y-7 px-5 py-5">
-        {msg && <p className="rounded-lg bg-subtle px-3 py-2 text-sm">{msg}</p>}
+        <NoticeLine notice={notice} scope="top" />
 
         <section className="space-y-2.5">
           <h3 className={label}>Google</h3>
@@ -89,25 +109,26 @@ export function Connectors({ onClose }: { onClose: () => void }) {
                     <a className={active ? btn : `${btnPrimary} px-2.5 py-1 text-xs`} href={`/api/connections/google/start?service=${service}`}>{active ? 'Reautorizar' : 'Conectar'}</a>
                   )}
                   {c && c.status !== 'revoked' && (
-                    <button disabled={busy} className={btn} onClick={() => act(() => api(`/api/connections/${c.id}`, { method: 'DELETE' }), 'Conexão revogada.')}>Desconectar</button>
+                    <button disabled={busy} className={btn} onClick={() => act('google', () => api(`/api/connections/${c.id}`, { method: 'DELETE' }), 'Conexão revogada.')}>Desconectar</button>
                   )}
                 </div>
               </div>
             );
           })}
+          <NoticeLine notice={notice} scope="google" />
         </section>
 
-        <McpSection servers={servers} busy={busy} act={act} />
-        <HttpSection tools={tools} busy={busy} act={act} />
+        <McpSection servers={servers} busy={busy} act={act} notice={notice} />
+        <HttpSection tools={tools} busy={busy} act={act} notice={notice} />
         </div>
       </div>
     </div>
   );
 }
 
-type Act = (fn: () => Promise<unknown>, ok?: string) => Promise<void>;
+type Act = (scope: string, fn: () => Promise<unknown>, ok?: string) => Promise<void>;
 
-function McpSection({ servers, busy, act }: { servers: McpServer[]; busy: boolean; act: Act }) {
+function McpSection({ servers, busy, act, notice }: { servers: McpServer[]; busy: boolean; act: Act; notice: Notice }) {
   const [form, setForm] = useState({ name: '', url: '', bearerToken: '' });
   return (
     <section className="space-y-2.5">
@@ -123,12 +144,15 @@ function McpSection({ servers, busy, act }: { servers: McpServer[]; busy: boolea
               <div className="mt-0.5 truncate font-mono text-xs text-muted">{s.url}</div>
             </div>
             <div className="flex gap-2">
-              <button disabled={busy} className={btn} onClick={() => act(() => api(`/api/mcp-servers/${s.id}/sync`, { method: 'POST' }), 'Catálogo sincronizado.')}>Sincronizar</button>
-              <button disabled={busy} className={btn} onClick={() => act(() => api(`/api/mcp-servers/${s.id}`, { method: 'DELETE' }))}>Remover</button>
+              <button disabled={busy} className={btn} onClick={() => act(`mcp:${s.id}`, () => api(`/api/mcp-servers/${s.id}/sync`, { method: 'POST' }), 'Catálogo sincronizado.')}>Sincronizar</button>
+              <button disabled={busy} className={btn} onClick={() => act(`mcp:${s.id}`, () => api(`/api/mcp-servers/${s.id}`, { method: 'DELETE' }))}>Remover</button>
             </div>
           </div>
           {s.lastError && <p className="mt-2 text-xs text-danger">{s.lastError}</p>}
           {s.tools.length > 0 && <p className="mt-2 text-xs text-muted">Tools: {s.tools.map((t) => t.name).join(', ')}</p>}
+          <div className="mt-2 empty:hidden">
+            <NoticeLine notice={notice} scope={`mcp:${s.id}`} />
+          </div>
         </div>
       ))}
       <div className={`${box} grid gap-2 border-dashed bg-subtle/40 sm:grid-cols-3`}>
@@ -139,7 +163,7 @@ function McpSection({ servers, busy, act }: { servers: McpServer[]; busy: boolea
           disabled={busy || !form.name || !form.url}
           className={`${btnPrimary} py-1.5 sm:col-span-3`}
           onClick={() =>
-            act(async () => {
+            act('mcp-new', async () => {
               await api('/api/mcp-servers', { method: 'POST', body: JSON.stringify({ name: form.name, url: form.url, bearerToken: form.bearerToken || undefined }) });
               setForm({ name: '', url: '', bearerToken: '' });
             }, 'Servidor cadastrado. Habilite-o na conversa pelo menu Ferramentas.')
@@ -147,6 +171,9 @@ function McpSection({ servers, busy, act }: { servers: McpServer[]; busy: boolea
         >
           Adicionar servidor MCP
         </button>
+        <div className="empty:hidden sm:col-span-3">
+          <NoticeLine notice={notice} scope="mcp-new" />
+        </div>
       </div>
     </section>
   );
@@ -154,7 +181,7 @@ function McpSection({ servers, busy, act }: { servers: McpServer[]; busy: boolea
 
 const exampleSchema = '{\n  "type": "object",\n  "properties": { "moeda": { "type": "string" } },\n  "required": ["moeda"]\n}';
 
-function HttpSection({ tools, busy, act }: { tools: HttpTool[]; busy: boolean; act: Act }) {
+function HttpSection({ tools, busy, act, notice }: { tools: HttpTool[]; busy: boolean; act: Act; notice: Notice }) {
   const [form, setForm] = useState({ name: '', description: '', method: 'GET', url: '', parameters: exampleSchema, authorization: '' });
   const [testArgs, setTestArgs] = useState<Record<string, string>>({});
   const [testResult, setTestResult] = useState<Record<string, string>>({});
@@ -175,7 +202,7 @@ function HttpSection({ tools, busy, act }: { tools: HttpTool[]; busy: boolean; a
               </div>
               <div className="mt-0.5 truncate font-mono text-xs text-muted">{t.url}</div>
             </div>
-            <button disabled={busy} className={btn} onClick={() => act(() => api(`/api/tools/${t.id}`, { method: 'DELETE' }))}>Remover</button>
+            <button disabled={busy} className={btn} onClick={() => act(`http:${t.id}`, () => api(`/api/tools/${t.id}`, { method: 'DELETE' }))}>Remover</button>
           </div>
           <div className="mt-2 flex gap-2">
             <input className={input} placeholder='argumentos de teste, ex.: {"moeda":"USD"}' value={testArgs[t.id] ?? ''} onChange={(e) => setTestArgs({ ...testArgs, [t.id]: e.target.value })} />
@@ -183,7 +210,7 @@ function HttpSection({ tools, busy, act }: { tools: HttpTool[]; busy: boolean; a
               disabled={busy}
               className={btn}
               onClick={() =>
-                act(async () => {
+                act(`http:${t.id}`, async () => {
                   const r = await api<{ ok: boolean; preview: string; durationMs: number }>(`/api/tools/${t.id}/test`, { method: 'POST', body: testArgs[t.id] || '{}' });
                   setTestResult({ ...testResult, [t.id]: `${r.ok ? 'OK' : 'Falhou'} em ${r.durationMs} ms\n${r.preview}` });
                 })
@@ -191,6 +218,9 @@ function HttpSection({ tools, busy, act }: { tools: HttpTool[]; busy: boolean; a
             >
               Testar
             </button>
+          </div>
+          <div className="mt-2 empty:hidden">
+            <NoticeLine notice={notice} scope={`http:${t.id}`} />
           </div>
           {testResult[t.id] && <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-lg bg-subtle p-2 font-mono text-xs text-muted">{testResult[t.id]}</pre>}
         </div>
@@ -211,7 +241,7 @@ function HttpSection({ tools, busy, act }: { tools: HttpTool[]; busy: boolean; a
           disabled={busy || !form.name || !form.url || !form.description}
           className={`${btnPrimary} w-full py-1.5`}
           onClick={() =>
-            act(async () => {
+            act('http-new', async () => {
               let parameters: unknown;
               try {
                 parameters = JSON.parse(form.parameters);
@@ -229,12 +259,13 @@ function HttpSection({ tools, busy, act }: { tools: HttpTool[]; busy: boolean; a
                   secretHeaders: form.authorization ? { Authorization: form.authorization } : undefined,
                 }),
               });
-              setForm({ ...form, name: '', description: '', url: '', authorization: '' });
+              setForm({ name: '', description: '', method: 'GET', url: '', parameters: exampleSchema, authorization: '' });
             }, 'Tool cadastrada. Habilite-a na conversa pelo menu Ferramentas.')
           }
         >
           Cadastrar tool HTTP
         </button>
+        <NoticeLine notice={notice} scope="http-new" />
       </div>
     </section>
   );

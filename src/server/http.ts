@@ -5,6 +5,7 @@ import { InsufficientCreditsError } from './credits/credits';
 import { config } from './config';
 import { AppError, unauthorized } from './errors';
 import { logger } from './logger';
+import { findSsrfError } from './security/ssrf';
 import { SESSION_COOKIE, userFromSessionToken, type SessionUser } from './auth/session';
 
 export async function currentUser(): Promise<SessionUser | null> {
@@ -44,6 +45,10 @@ export function handleError(err: unknown) {
   }
   if (err instanceof InsufficientCreditsError) {
     return NextResponse.json({ error: { code: 'insufficient_credits', message: err.message } }, { status: 402 });
+  }
+  const ssrf = findSsrfError(err);
+  if (ssrf) {
+    return NextResponse.json({ error: { code: 'destination_blocked', reason: ssrf.reason, message: ssrf.message } }, { status: 400 });
   }
   logger.error({ err }, 'erro não tratado na API');
   return NextResponse.json({ error: { code: 'internal', message: 'erro interno' } }, { status: 500 });
