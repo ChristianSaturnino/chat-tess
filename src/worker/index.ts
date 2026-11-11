@@ -15,7 +15,9 @@ async function main() {
   const boss = await getBoss({ role: 'worker' });
   logger.info({ workerId }, 'worker iniciado');
 
-  await boss.work<RunJob>(RUN_QUEUE, { localConcurrency: Number(process.env.WORKER_CONCURRENCY ?? 4) }, async (jobs) => {
+  // Polling curto: o intervalo padrão (2 s) somava direto ao tempo até o primeiro texto.
+  const workOptions = { localConcurrency: Number(process.env.WORKER_CONCURRENCY ?? 4), pollingIntervalSeconds: 0.5 };
+  await boss.work<RunJob>(RUN_QUEUE, workOptions, async (jobs) => {
     for (const job of jobs) {
       const result = await executeRun(job.data.runId, workerId);
       logger.info({ runId: job.data.runId, result }, 'job concluído');

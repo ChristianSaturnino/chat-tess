@@ -8,17 +8,19 @@
   },
   "scripts": {
     "dev": "next dev",
-    "dev:worker": "tsx watch --env-file=.env src/worker/index.ts",
+    "dev:worker": "tsx watch --env-file-if-exists=.env src/worker/index.ts",
     "build": "next build",
-    "start": "next start",
-    "worker": "tsx src/worker/index.ts",
+    "start": "next start -H 0.0.0.0",
+    "worker": "tsx --env-file-if-exists=.env src/worker/index.ts",
     "typecheck": "tsc --noEmit",
     "db:up": "docker compose up -d postgres",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx --env-file=.env src/db/migrate.ts",
+    "db:migrate": "tsx --env-file-if-exists=.env src/db/migrate.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "mcp-demo": "tsx --env-file=.env src/mcp-demo/server.ts"
+    "mcp-demo": "tsx --env-file-if-exists=.env src/mcp-demo/server.ts",
+    "metrics": "tsx --env-file-if-exists=.env scripts/metrics.ts",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1165.0",
@@ -40,12 +42,14 @@
     "react-dom": "^19.3.1",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
+    "tsx": "^4.23.15",
     "turndown": "^7.2.5",
     "undici": "^8.12.4",
     "unpdf": "^2.1.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.0",
     "@tailwindcss/postcss": "^4.3.5",
     "@types/node": "^26.6.6",
     "@types/pg": "^8.23.1",
@@ -54,7 +58,6 @@
     "@types/turndown": "^5.0.6",
     "drizzle-kit": "^0.31.11",
     "tailwindcss": "^4.3.5",
-    "tsx": "^4.23.15",
     "typescript": "^5.9.3",
     "vitest": "^5.1.0"
   }

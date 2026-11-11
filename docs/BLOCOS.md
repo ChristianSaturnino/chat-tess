@@ -55,6 +55,15 @@ Objetivo: evidências reproduzíveis no ambiente público.
 
 Aceite: sessão limpa no deploy reproduz o roteiro da §14.
 
+## Status (10/11/2026)
+
+| Bloco | Situação |
+|---|---|
+| 1 | Concluído e commitado. |
+| 2 | Concluído e commitado. OpenAI e Google verificados com serviços reais depois do commit. |
+| 3 | Concluído; aguardando commit junto com o Bloco 4. |
+| 4 | Código, testes, imagem Docker e documentação prontos. Falta o deploy público (contas Railway/R2), o vídeo e o acesso dos avaliadores. |
+
 ## Dependências externas (o que só você consegue fazer)
 
 | Quando | Item |

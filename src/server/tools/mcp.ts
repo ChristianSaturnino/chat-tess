@@ -194,19 +194,24 @@ export async function mcpProvider(userId: string, serverId: string): Promise<(To
       timeoutMs: CALL_TIMEOUT_MS + 5_000,
       async execute(args, ctx) {
         validateArgs(def.inputSchema, args);
+        // Servidores sinalizam tool inexistente ou argumentos fora do schema lançando erro
+        // ou devolvendo isError com a mensagem; os dois casos disparam ressincronização.
+        const schemaChanged = async () => {
+          await syncMcpServer(userId, serverId).catch(() => {});
+          return new ToolError('mcp_schema_changed', `a tool ${def.name} mudou ou não existe mais no servidor; catálogo ressincronizado`);
+        };
+        const looksLikeSchemaChange = (msg: string) => /tool .*not found|unknown tool|-32602/i.test(msg);
         let result;
         try {
           result = await callTool(def.name, args, ctx.signal);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          if (/not found|unknown tool|-32602/i.test(msg)) {
-            await syncMcpServer(userId, serverId).catch(() => {});
-            throw new ToolError('mcp_schema_changed', `a tool ${def.name} mudou ou não existe mais no servidor; catálogo ressincronizado`);
-          }
+          if (looksLikeSchemaChange(msg)) throw await schemaChanged();
           throw new ToolError('mcp_error', msg);
         }
         const parts = (result.content as { type: string; text?: string }[] | undefined) ?? [];
         const text = parts.map((p) => (p.type === 'text' ? p.text : `[conteúdo ${p.type} omitido]`)).join('\n');
+        if (result.isError === true && looksLikeSchemaChange(text)) throw await schemaChanged();
         const { text: body } = truncate(text || JSON.stringify(result.structuredContent ?? {}), MAX_CHARS);
         return {
           isError: result.isError === true,

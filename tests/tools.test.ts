@@ -3,7 +3,7 @@ import type { ChildProcess } from 'node:child_process';
 import { asc, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { closeDb, db } from '@/db/client';
-import { messageSources, messages, runEvents, runs, sources, toolCalls } from '@/db/schema';
+import { mcpServers, messageSources, messages, runEvents, runs, sources, toolCalls } from '@/db/schema';
 import { executeRun } from '@/server/chat/engine';
 import { setLlmOverride } from '@/server/llm';
 import { FakeAdapter } from '@/server/llm/fake';
@@ -260,6 +260,24 @@ describe('MCP', () => {
     const server = await createMcpServer(actor.userId, { name: 'demo', url: `http://localhost:${port}/mcp`, bearerToken: 'errado' });
     expect(server.status).toBe('error');
     expect(server.lastError).toBeTruthy();
+  });
+
+  it('tool que sumiu do servidor gera erro controlado e ressincroniza o catálogo', async () => {
+    const { actor, conv } = await setup();
+    const server = await createMcpServer(actor.userId, { name: 'demo', url: `http://localhost:${port}/mcp`, bearerToken: 'segredo-demo' });
+    // Catálogo local desatualizado: anuncia uma tool que o servidor não tem mais.
+    const stale = [...server.catalog, { name: 'legacy_export', description: 'Exporta orçamento (removida)', inputSchema: { type: 'object' } }];
+    await db().update(mcpServers).set({ catalog: stale, catalogHash: 'antigo' }).where(eq(mcpServers.id, server.id));
+    await setConversationTool(actor.userId, conv.id, `mcp:${server.id}`, true);
+
+    const t = await startTurn(actor, { conversationId: conv.id, text: '[[tool:mcp_demo_legacy_export {}]]', idempotencyKey: randomUUID() });
+    expect(await executeRun(t.runId, 'w1')).toBe('completed');
+    const [call] = await db().select().from(toolCalls).where(eq(toolCalls.runId, t.runId));
+    expect(call!.status).toBe('failed');
+    expect(call!.error?.code).toBe('mcp_schema_changed');
+    const [after] = await db().select().from(mcpServers).where(eq(mcpServers.id, server.id));
+    expect(after!.catalog.map((c) => c.name)).not.toContain('legacy_export');
+    expect(after!.catalogVersion).toBeGreaterThan(server.catalogVersion);
   });
 
   it('reconecta quando o servidor perde a sessão', async () => {

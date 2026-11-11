@@ -114,5 +114,11 @@ const http = createServer(async (req, res) => {
   }
 });
 
-const port = Number(process.env.MCP_DEMO_PORT ?? 3100);
+if (process.env.NODE_ENV === 'production' && !token) {
+  console.error('MCP_DEMO_TOKEN é obrigatório em produção');
+  process.exit(1);
+}
+
+// Em plataformas como o Railway a porta pública chega em PORT.
+const port = Number(process.env.MCP_DEMO_PORT ?? process.env.PORT ?? 3100);
 http.listen(port, () => console.log(`MCP demo em http://localhost:${port}/mcp${token ? ' (bearer token exigido)' : ''}`));

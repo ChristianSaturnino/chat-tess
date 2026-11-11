@@ -6,3 +6,8 @@ node_modules/
 next-env.d.ts
 coverage/
 .data/
+
+.next-e2e/
+.data/
+test-results/
+playwright-report/
