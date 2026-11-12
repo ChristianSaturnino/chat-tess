@@ -32,7 +32,7 @@ Registro do que foi verificado na prática, com data. Valores de modelo e preço
 | Compactação dupla e pergunta por fato antigo | ok |
 | Login Google + conexões Drive/Gmail (Testing, test user) | ok; Gmail reporta 5 scopes por causa da autorização incremental |
 | Leitura de Google Docs e de e-mail real | ok |
-| Exfiltração via busca nativa com dado privado | **falha encontrada e corrigida** (DECISOES, Bloco 3) |
+| Exfiltração via busca nativa com dado privado | **falha encontrada e corrigida** (DECISOES, "Busca nativa também é saída de dados") |
 | Enqueue transacional pg-boss (`db.executeSql` no client da transação) | ok (testes) |
 | Imagem Docker de produção | build ok (`docker build .`) |
 

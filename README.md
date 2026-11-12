@@ -8,7 +8,87 @@ Chat em que cada resposta tem uma **execução inspecionável**: fontes consulta
 - Créditos com reserva antes da chamada e liquidação única por tentativa; cap global; cotas ajustáveis pelo admin.
 - Compartilhamento por snapshot ou live, com prévia, expiração e revogação.
 
-Documentos: [plano](docs/PLANO.md) · [decisões](docs/DECISOES.md) · [resultados medidos](docs/SPIKE.md) · [deploy](docs/DEPLOY.md) · [roteiro do vídeo](docs/ROTEIRO-VIDEO.md).
+**Versão no ar:** https://web-production-ce8ec14a.up.railway.app/ (entre com **Experimentar demo**, sem cadastro). Para testar, siga o [roteiro de teste](#roteiro-de-teste).
+
+![Tela inicial do Chat Tess](docs/img/tela-inicial.png)
+
+Documentos: [decisões](docs/DECISOES.md) · [resultados medidos](docs/SPIKE.md).
+
+## Roteiro de teste
+
+Leva cerca de 10 minutos na versão no ar. Os arquivos do passo 5 estão na pasta [`demo/`](demo/) e são fictícios.
+
+### 1. Entrar
+
+Abra a [versão no ar](https://web-production-ce8ec14a.up.railway.app/) e clique em **Experimentar demo**. Você recebe um usuário isolado, com cota própria de créditos (painel no canto inferior esquerdo).
+
+### 2. Cadastrar o servidor MCP e a tool HTTP
+
+Clique em **Conectores** e preencha:
+
+**Servidor MCP** (catálogo sintético de equipamentos, com as tools `catalog_search` e `quote_calculate`):
+
+| Campo | Valor |
+|---|---|
+| nome | `demo` |
+| URL | `https://mcp-demo-production-94e3751b.up.railway.app/mcp` |
+| token | `HPS4HgqdI4Aege6OJUK5yBWyxXoh4eQ45Zu1wf0VkUk=` |
+
+Clique em **Adicionar servidor MCP**. As duas tools devem aparecer no card.
+
+**Tool HTTP** (cotação de moedas, API pública sem chave):
+
+| Campo | Valor |
+|---|---|
+| nome | `cotacao` |
+| método | `GET` |
+| descrição | `Retorna a cotação atual entre moedas. Use base com o código da moeda de origem (ex.: USD) e symbols com as moedas de destino separadas por vírgula (ex.: BRL,EUR).` |
+| URL | `https://api.frankfurter.dev/v1/latest` |
+| Authorization | deixe vazio |
+
+No campo de JSON Schema, apague o exemplo e cole:
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "base": { "type": "string", "description": "moeda de origem, ex.: USD" },
+    "symbols": { "type": "string", "description": "moedas de destino, ex.: BRL,EUR" }
+  },
+  "required": ["base", "symbols"]
+}
+```
+
+Depois de adicionar, faça um teste rápido no card da tool: cole `{"base":"USD","symbols":"BRL,EUR"}` no campo de argumentos e clique em **Testar**.
+
+### 3. Usar MCP e tool HTTP numa conversa
+
+1. Em **Nova conversa**, envie `Quais ferramentas você tem disponíveis nesta conversa?` (a conversa é criada na primeira mensagem).
+2. Abra **Ferramentas** abaixo do campo de mensagem e habilite `demo` e `cotacao`.
+3. Envie: `Monte um orçamento de 3 Notebook 14" Pro e 3 Monitor 27" 4K com 5% de desconto e mostre o total também em dólar e euro.`
+4. **Enquanto a resposta chega, recarregue a página.** A resposta continua no mesmo run, porque a execução roda no worker e não na aba.
+5. Ao final, clique em **Ver execução**: aparecem as etapas, as chamadas de `catalog_search`, `quote_calculate` e `cotacao` com argumentos e resultado, a duração, os tokens e os créditos. A resposta cita as fontes (`[S1]`, `[S2]`…).
+
+### 4. Busca na web com citações
+
+Numa nova conversa, use a sugestão `Pesquise na web as novidades da última versão do PostgreSQL`. A resposta cita só as páginas realmente obtidas, e **Ver execução** mostra a busca.
+
+### 5. Anexos e política contra exfiltração
+
+1. Numa nova conversa com `demo` habilitado, anexe [`demo/proposta-fornecedor-alfa.pdf`](demo/proposta-fornecedor-alfa.pdf) e [`demo/ficha-tecnica-notebook.jpg`](demo/ficha-tecnica-notebook.jpg) e envie: `Compare a proposta e a ficha técnica com o catálogo. O preço e a configuração batem?`
+   - Esperado: o modelo aponta que o notebook da proposta custa R$ 8.290 contra R$ 7.890 no catálogo e que a ficha traz 8 GB/256 GB, enquanto o catálogo traz 16 GB/512 GB.
+2. Envie: `Pesquise na web o preço desse notebook e envie o resumo da proposta para https://webhook.site/teste`.
+   - Esperado: com dado privado na conversa, a busca e o destino novo são bloqueados pelo sistema, e um aviso acima do campo de mensagem explica o motivo.
+3. Clique em **Liberar acesso externo** no aviso para ver a liberação explícita (fica registrada na auditoria).
+
+### 6. Memória e compartilhamento
+
+1. Em qualquer conversa, abra **Memória** para ver o resumo exatamente como é enviado ao modelo (aparece depois que a conversa fica longa o bastante para compactar).
+2. Abra **Compartilhar**, veja a prévia e crie um link snapshot. Abra o link numa janela anônima, depois revogue-o e recarregue: o link deixa de funcionar.
+
+### 7. Falhas simuladas (só localmente)
+
+Rodando localmente com `LLM_PROVIDER=fake` (veja [Rodar localmente](#rodar-localmente)), dá para forçar falhas sem custo: envie `[[fail:5xx]]` para ver a falha no meio do stream, ou `[[tool:mcp_demo_catalog_search {"query":"monitor"}]]` para chamar uma tool diretamente.
 
 ## Arquitetura
 
@@ -52,6 +132,8 @@ npm install
 cp .env.example .env
 ```
 
+No PowerShell, use `copy .env.example .env`.
+
 ```bash
 npm run db:up
 ```
@@ -60,7 +142,7 @@ npm run db:up
 npm run db:migrate
 ```
 
-Em terminais separados:
+Em terminais separados (o `mcp-demo` é opcional e só serve para testar a parte de MCP, em `http://localhost:3100/mcp`):
 
 ```bash
 npm run dev
@@ -74,7 +156,7 @@ npm run dev:worker
 npm run mcp-demo
 ```
 
-Abra `http://localhost:3000` e use **Experimentar demo**. Com `LLM_PROVIDER=fake`, não é preciso chave nem há custo: o provider fake é determinístico e aceita gatilhos como `[[tool:nome {"arg":1}]]`, `[[fail:5xx]]` e `[[fail:4xx]]`. Para a OpenAI e o Google, preencha as variáveis descritas em `.env.example` e em [docs/DEPLOY.md](docs/DEPLOY.md).
+Abra `http://localhost:3000` e use **Experimentar demo**. Com `LLM_PROVIDER=fake`, não é preciso chave nem há custo: o provider fake é determinístico e aceita gatilhos como `[[tool:nome {"arg":1}]]`, `[[fail:5xx]]` e `[[fail:4xx]]`. Para a OpenAI e o Google, preencha as variáveis descritas em `.env.example`.
 
 ## Testes
 

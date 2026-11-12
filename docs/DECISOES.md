@@ -1,34 +1,34 @@
 # Decisões tomadas na implementação
 
-Registro de escolhas que refinam ou divergem do [PLANO.md](PLANO.md).
+Registro das escolhas feitas na implementação, inclusive onde ela divergiu do plano inicial, com motivo e custo aceito.
 
-## Bloco 1
+## Base: autenticação, execução e créditos
 
 **Sessão própria em vez de Auth.js.** O plano previa Auth.js. Na implementação: login Google via `google-auth-library` (PKCE + state, verificação do `id_token`) e sessão própria (token aleatório no cookie, só o hash SHA-256 no banco). Motivos:
 - O provider Credentials do Auth.js não usa sessões de banco; a demo isolada por visitante exigiria JWT ou contorno.
 - O Auth.js v5 ainda está em beta na data do projeto.
-- O Bloco 2 precisa de OAuth incremental para Drive/Gmail, com tokens cifrados e refresh serializado, que o Auth.js não resolve sozinho (PLANO §9). Um único cliente OAuth para login e conectores reduz superfície.
-Custo aceito: menos código pronto para CSRF/rotação. Mitigação: cookie `httpOnly`/`SameSite=Lax`, checagem de `Origin` em toda mutação, expiração de 14 dias.
+- Os conectores Drive/Gmail precisam de OAuth incremental, com tokens cifrados e refresh serializado, que o Auth.js não resolve sozinho. Um único cliente OAuth para login e conectores reduz superfície.
+Custo aceito: menos código pronto para CSRF/rotação. Mitigação: cookie `httpOnly`/`SameSite=Lax`, checagem de `Origin` em toda rota de mutação (requisição sem `Origin` é recusada), expiração de 14 dias e logout que apaga a sessão no banco. Fora do escopo: renovação da sessão com o uso e "sair de todos os dispositivos".
 
 **Provider LLM `fake`.** Adapter determinístico, sem rede, com gatilhos `[[fail:4xx]]` e `[[fail:5xx]]` para exercitar cobrança/recuperação. Permite desenvolver e testar sem chave. Modelo e preços OpenAI vêm do `.env` (`OPENAI_MODEL`, `OPENAI_PRICING_JSON`): não são fixados no código.
 
 **Recuperação.** Além dos retries do pg-boss, o worker varre a cada 15 s runs `running` com lease vencido e os reenfileira. O claim incrementa `runs.version` (fencing); toda escrita do engine confere a versão sob `FOR UPDATE`, então um worker antigo que volte não sobrescreve nada.
 
-**Cancelamento com stream abortado** não recebe usage do provider: a reserva fica `unknown` (não liberada) até reconciliação, conforme PLANO §7.
+**Cancelamento com stream abortado** não recebe usage do provider, e o mesmo vale para worker que cai durante uma chamada. A reserva fica `unknown` e continua contando contra a cota, porque não há como obter o consumo real depois (`store:false`). É uma escolha conservadora: o cap nunca é ultrapassado, ao custo de cobrar a mais em cancelamentos. A reconciliação prevista no plano inicial não foi implementada.
 
 **Append-only** de `usage_ledger` e `audit_events` por trigger (rejeita UPDATE/DELETE), independente do papel do banco.
 
-## Bloco 2
+## Ferramentas, conectores e segurança
 
 **Loop de etapas com checkpoint por etapa.** Cada chamada ao modelo é uma etapa `llm_call` e cada tool pedida é uma etapa `tool_call`, com saída confirmada no checkpoint. Na retomada, o engine reconstrói o contexto do run a partir dos checkpoints e continua da primeira etapa pendente, sem repetir chamadas já confirmadas. Chamadas pedidas na mesma resposta são tratadas como independentes e rodam em paralelo (até 4).
 
-**Ações com efeito externo nunca são repetidas automaticamente.** Tool HTTP `POST` (salvo declaração do dono) e tool MCP sem `readOnlyHint` contam como efeito externo. Se o worker cai durante uma delas, a etapa vira `unknown` e o modelo recebe "resultado desconhecido, não repetido". Leituras são reexecutadas.
+**Ações com efeito externo nunca são repetidas automaticamente.** Tool HTTP `POST` (salvo declaração do dono no cadastro via API; a tela não expõe essa opção) e tool MCP sem `readOnlyHint` contam como efeito externo. Se o worker cai durante uma delas, a etapa vira `unknown` e o modelo recebe "resultado desconhecido, não repetido". Leituras são reexecutadas.
 
-**Política contra exfiltração por destino, não por instrução ao modelo.** Com dado privado na conversa (anexo, Drive ou Gmail), `scrape_page` só acessa URLs já obtidas como fonte nesta conversa, como as que vieram de uma busca. Tools HTTP e servidores MCP têm destino fixo cadastrado pelo dono e contam como destinos revisados. O bloqueio gera evento `policy_blocked` e auditoria. Uma etapa de aprovação manual (`waiting_approval`) ficou fora deste bloco.
+**Política contra exfiltração por destino, não por instrução ao modelo.** Com dado privado na conversa (anexo, Drive ou Gmail), `scrape_page` só acessa URLs já obtidas como fonte nesta conversa, como as que vieram de uma busca. Tools HTTP e servidores MCP têm destino fixo cadastrado pelo dono e contam como destinos revisados. O bloqueio gera evento `policy_blocked` e auditoria. Uma aprovação manual por etapa (`waiting_approval`) não foi implementada. A liberação que existe é por conversa (ver "Bloqueio visível e liberação explícita").
 
 **Fontes com rótulo por run.** Todo material obtido (anexo, página, arquivo do Drive, e-mail, resultado de tool) recebe um rótulo `S1`, `S2`… e entra no contexto com esse rótulo. Na finalização, só rótulos que existem no run contam como citados; os inventados pelo modelo são ignorados. Fontes consultadas e não citadas ficam visíveis separadamente. Citações `url_citation` da busca nativa viram fontes web.
 
-**Busca nativa só com teto de custo.** A busca da OpenAI só é oferecida quando `OPENAI_WEB_SEARCH_FEE_MICRO` está configurado. A reserva inclui `max_tool_calls × tarifa`, e a liquidação registra as chamadas reais em colunas próprias do ledger. Sem tarifa conhecida, a busca fica indisponível, para não romper o cap estrito (PLANO §7).
+**Busca nativa só com teto de custo.** A busca da OpenAI só é oferecida quando `OPENAI_WEB_SEARCH_FEE_MICRO` está configurado. A reserva inclui `max_tool_calls × tarifa`, e a liquidação registra as chamadas reais em colunas próprias do ledger. Sem tarifa conhecida, a busca fica indisponível, para não romper o cap estrito.
 
 **SSRF guard na conexão.** O IP é validado no `lookup` usado pelo agente HTTP, ou seja, no endereço efetivamente conectado, e não numa resolução anterior. Isso fecha a janela de DNS rebinding. Cada redirect é revalidado; headers sensíveis não seguem para outra origem; tools HTTP exigem https. Exceções de `localhost` só via `SSRF_ALLOW_HOSTS`, para desenvolvimento.
 
@@ -42,7 +42,7 @@ Custo aceito: menos código pronto para CSRF/rotação. Mitigação: cookie `htt
 
 **Verificado com a OpenAI real (10/11/2026):** streaming de texto; busca nativa com `url_citation` virando fonte citada; loop de várias etapas com tools MCP e reenvio de reasoning cifrado com `store:false`, sem erro de item ausente. Custo do smoke test: 7 chamadas, US$ 0,012, dos quais US$ 0,01 foi a única busca.
 
-## Bloco 3
+## Memória, compartilhamento e cotas
 
 **Compactação como etapa do run.** Antes da primeira chamada ao modelo, se a estimativa do contexto (memória atual + mensagens após o corte + anexos) passa do gatilho, as mensagens fora dos últimos turnos são resumidas. A compactação é uma etapa `compaction`, com tentativa, reserva e liquidação próprias, então aparece na execução e no consumo. A memória nova só vale depois de persistida (`context_summaries`, versionada, com corte por `seq`). Se falhar, o contexto anterior é mantido e a resposta segue. Pares de chamada/resultado de tools nunca são cortados, porque pertencem ao run em andamento e não ao histórico.
 
@@ -72,7 +72,7 @@ Custo aceito: menos código pronto para CSRF/rotação. Mitigação: cookie `htt
 
 **Fórmulas.** O Markdown usa `remark-math` + `rehype-katex` (KaTeX sem `trust`, sem `\href`). Os delimitadores `\( \)` e `\[ \]` que o modelo usa são convertidos antes do parse. Cifrão simples não abre fórmula, para que "R$ 10 e R$ 20" continue texto. O prompt de sistema (v3) pede esses delimitadores.
 
-**Custo da busca.** A busca nativa domina o custo (US$ 10 por 1k chamadas, mais tokens de conteúdo). Passou a usar `search_context_size: "low"` e uma chamada por resposta. As cotas de produção em `DEPLOY.md` foram recalculadas para isso.
+**Custo da busca.** A busca nativa domina o custo (US$ 10 por 1k chamadas, mais tokens de conteúdo). Passou a usar `search_context_size: "low"` e uma chamada por resposta (`WEB_SEARCH_MAX_CALLS=1` no `.env.example` e no deploy; sem a variável, o padrão do código é 3). As cotas de produção foram recalculadas para isso: uma resposta com busca custa cerca de 10 créditos (US$ 0,01) e uma só de texto, menos de 1.
 
 **"Nova conversa".** A criação fica num ref, e o envio espera por ela, em vez de usar o `activeId` anterior. O servidor reaproveita a conversa vazia mais recente, então cliques repetidos não acumulam conversas vazias.
 
