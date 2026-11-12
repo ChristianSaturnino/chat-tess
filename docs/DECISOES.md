@@ -78,4 +78,16 @@ Custo aceito: menos código pronto para CSRF/rotação. Mitigação: cookie `htt
 
 **Bucket do Railway em vez de R2.** O plano previa Cloudflare R2. O Railway oferece buckets privados compatíveis com S3 no mesmo projeto, então o storage passou a aceitar qualquer endpoint S3 (`S3_ENDPOINT`, `S3_BUCKET`…). O deploy usa o bucket do Railway, e o R2 continua possível só trocando o endpoint. Menos uma conta e um conjunto de credenciais para criar e revogar.
 
-**Ainda não verificado:** refresh real após a expiração do access token e o fluxo `reconnect_required` com revogação feita no Google.
+## Limitações conhecidas
+
+- O resumo de memória perde detalhes; o histórico completo continua visível e os anexos antigos não são reenviados além do orçamento.
+- O `scrape_page` não executa JavaScript.
+- MCP: Streamable HTTP com token bearer do dono. OAuth MCP genérico e stdio estão fora do escopo.
+- Em modo Testing, o Google aceita só os test users cadastrados, e os tokens expiram em 7 dias.
+- A aprovação manual de ações (`waiting_approval`) está prevista no modelo de estados, mas não foi implementada: ações bloqueadas pela política são recusadas, não colocadas em espera.
+- Tools HTTP e MCP cadastradas pelo dono são destinos revisados, mas os argumentos não são. Uma tool que escreve (por exemplo, enviar e-mail) poderia ser acionada por conteúdo injetado, sem aprovação humana. As tools da demo são só de leitura, e cada chamada aparece com argumentos em **Ver execução**.
+- Links nas respostas são clicáveis. Um conteúdo injetado poderia induzir o modelo a montar um link com dados na URL; o envio só acontece se o usuário clicar.
+- **Liberar acesso externo** desliga a política naquela conversa inteira, não só numa chamada.
+- Reservas `unknown` não são reconciliadas depois.
+- Sessão de 14 dias fixos, sem renovação com o uso nem "sair de todos os dispositivos".
+- Ainda não verificado com a conta real: refresh após a expiração do access token e o fluxo `reconnect_required` com revogação feita no Google.

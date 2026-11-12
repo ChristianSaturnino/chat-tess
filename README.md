@@ -117,8 +117,9 @@ Garantias e seus limites:
 - **Um turno, um run.** O POST usa chave de idempotência. Mensagem, run, evento e job são confirmados numa única transação, e só pode haver um run ativo por conversa.
 - **Recuperação.** O worker trabalha com lease, heartbeat e fencing por versão. Etapas confirmadas são reaproveitadas, e uma tentativa interrompida fica como `unknown`, sem texto concatenado.
 - **Efeitos externos não têm "exatamente uma vez".** Leituras podem ser repetidas; ações com efeito externo nunca são repetidas automaticamente.
-- **Créditos em micro-USD inteiros.** As reservas de usuário e global são feitas com ordem fixa de locks, e o consumo sem `usage` fica `unknown` com a reserva mantida.
+- **Créditos em micro-USD inteiros.** As reservas de usuário e global são feitas com ordem fixa de locks, e o consumo sem `usage` (cancelamento, queda do worker) fica `unknown`: a reserva continua contando contra a cota, porque o consumo real não pode ser consultado depois. O cap nunca é ultrapassado, ao custo de cobrar a mais nesses casos.
 - **Política contra exfiltração.** Com dado privado no contexto, um destino novo é bloqueado e a busca nativa é retirada da chamada. A regra é aplicada pelo sistema, não pedida ao modelo. Um aviso acima do campo de mensagem explica o bloqueio, e o dono pode liberar o acesso externo naquela conversa com um clique: a liberação é explícita, revogável e auditada.
+- **Prompt injection.** Anexos, páginas, e-mails, documentos e resultados de tools entram rotulados como dado, não instrução, inclusive na memória resumida. A defesa principal, porém, não depende do modelo obedecer: a política acima limita os destinos, os scopes do Google são somente leitura, e imagens nas respostas não são carregadas (viram texto), o que fecha a exfiltração por URL de imagem.
 
 ## Rodar localmente
 
@@ -211,10 +212,6 @@ src/
 tests/ e2e/       Vitest e Playwright
 ```
 
-## Limitações assumidas
+## Limitações conhecidas
 
-- O resumo de memória perde detalhes; o histórico completo continua visível e os anexos antigos não são reenviados além do orçamento.
-- O `scrape_page` não executa JavaScript.
-- MCP: Streamable HTTP com token bearer do dono. OAuth MCP genérico e stdio estão fora do escopo.
-- Em modo Testing, Google aceita só os test users cadastrados, e os tokens expiram em 7 dias.
-- A aprovação manual de ações (`waiting_approval`) está prevista no modelo de estados, mas não foi implementada: ações bloqueadas pela política são recusadas, não colocadas em espera.
+Estão listadas no fim de [docs/DECISOES.md](docs/DECISOES.md#limitações-conhecidas), junto com o motivo de cada escolha.
