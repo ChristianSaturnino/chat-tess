@@ -38,7 +38,8 @@ export function handleError(err: unknown) {
     return NextResponse.json({ error: { code: err.code, message: err.message, ...err.details } }, { status: err.status });
   }
   if (err instanceof ZodError) {
-    return NextResponse.json({ error: { code: 'invalid_payload', message: 'payload inválido', issues: err.issues } }, { status: 400 });
+    const detail = err.issues.map((i) => (i.path.length ? `${i.path.join('.')}: ${i.message}` : i.message)).join('; ');
+    return NextResponse.json({ error: { code: 'invalid_payload', message: `payload inválido (${detail})`, issues: err.issues } }, { status: 400 });
   }
   if (err instanceof SyntaxError) {
     return NextResponse.json({ error: { code: 'invalid_json', message: 'corpo JSON inválido' } }, { status: 400 });

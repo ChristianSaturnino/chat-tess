@@ -14,10 +14,10 @@ import { toFunctionName, ToolError, type ToolProvider } from './types';
 const MAX_CHARS = 20_000;
 
 export const httpToolInput = z.object({
-  name: z.string().regex(/^[a-zA-Z][a-zA-Z0-9_-]{1,40}$/, 'use letras, números, _ ou -'),
-  description: z.string().min(10).max(1000),
+  name: z.string().trim().regex(/^[a-zA-Z][a-zA-Z0-9_-]{1,40}$/, 'use letras, números, _ ou -'),
+  description: z.string().trim().min(10).max(1000),
   method: z.enum(['GET', 'POST']),
-  url: z.string().url(),
+  url: z.string().trim().url(),
   parameters: z.record(z.string(), z.unknown()),
   secretHeaders: z.record(z.string(), z.string()).optional(),
   sideEffect: z.boolean().optional(),

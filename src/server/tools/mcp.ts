@@ -19,9 +19,9 @@ const MAX_TOOLS = 50;
 const CALL_TIMEOUT_MS = 30_000;
 
 export const mcpServerInput = z.object({
-  name: z.string().min(2).max(40),
-  url: z.string().url(),
-  bearerToken: z.string().min(1).max(4000).optional(),
+  name: z.string().trim().min(2).max(40),
+  url: z.string().trim().url(),
+  bearerToken: z.string().trim().min(1).max(4000).optional(),
 });
 
 type ServerRow = typeof mcpServers.$inferSelect;
